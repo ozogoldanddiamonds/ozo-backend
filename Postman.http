@@ -1,0 +1,795 @@
+POST http://localhost:3001/api/register
+Content-Type: application/json
+
+{
+  "name": "Admin",
+  "email": "info@ozogoldanddiamonds.com",
+  "password": "ozo@2026",
+  "role": "BRANCH",
+  "permissions": [
+    "ADD_PRODUCT",
+    "DELETE_PRODUCT"
+  ]
+}
+
+# {
+#   "name": "kphb Branch",
+#   "email": "kphb@gmail.com",
+#   "password": "kphb123",
+#   "role": "SUB_BRANCH",
+#   "contactNumber": "9876543219",
+#   "address": "kphb",
+#   "location": "Hyderabad",
+#   "branchId":"6a3912d97c3f96315204b938"
+# }
+
+###
+GET http://localhost:3001/api/getSubBranchById/6a3a66084917d3584b12b4a4
+Content-Type: application/json
+delete-subbranch
+
+###
+DELETE http://localhost:3001/api/delete-subbranch/6a3a66084917d3584b12b4a4
+Content-Type: application/json
+
+
+###
+PUT  http://localhost:3001/api/update-subbranch/6a3a67947a81e7604d8a7184
+Content-Type: application/json
+
+{
+  "name": "hitech cirt Branch",
+  "email": "hitech@gmail.com",
+  "password": "hitech123",
+  "role": "SUB_BRANCH",
+  "contactNumber": "9876543210",
+  "address": "Miyapur",
+  "location": "Hyderabad",
+  "branchId":"6a3912d97c3f96315204b938"
+}
+
+### 
+GET http://localhost:3001/api/get-branch-list
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/get-all-subbranches
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/login
+Content-Type: application/json
+
+{
+  "email": "hitech@gmail.com",
+  "password": "hitech123"
+}
+ 
+
+###
+POST http://localhost:3001/api/forgot-password
+Content-Type: application/json
+
+{
+  "email":"admin@gmail.com"
+}
+
+###
+POST http://localhost:3001/api/reset-password
+Content-Type: application/json
+
+{
+  "token": "df5f776a6816381d8690219464058cf82d96faf187636cdb73e9f6e0914986f3",
+  "password": "admin123"
+}
+
+###
+POST http://localhost:3001/api/gold-rate
+Content-Type: application/json
+
+{
+  "ratePerGram": 5000,
+  "updatedBy": "69f067f6ac6f3e806161afbe"
+}
+
+
+
+
+###
+GET http://localhost:3001/api/gold-rate
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/gold-rate/69f0f219d271df42b36bf134
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/gold-rate/69f0f219d271df42b36bf134
+Content-Type: application/json
+
+{
+  "ratePerGram": 1000,
+  "updatedBy": "69f067f6ac6f3e806161afbe"
+}
+
+###
+DELETE http://localhost:3001/api/gold-rate/69f0ef51d271df42b36bf108
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-category
+
+###
+GET http://localhost:3001/api/getallcategory
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getbyIdcategory/69f10a44326d005b487c377f
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/updatecategory/69f35b350d4a40e6da874184
+
+###
+DELETE http://localhost:3001/api/deletecategory/69f19a810ece6ef90232bfac
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/Cretesubcategory
+
+###
+GET http://localhost:3001/api/Getsubcategory
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getbyIdsubcategory/69f1a824e5fe4098377801fc
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/Updatesubcategory/69f1a9c0a16e7054a7af4433
+
+###
+DELETE http://localhost:3001/api/Deletesubcategory/69f1a824e5fe4098377801fc
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/Create-sub-subcategory
+
+###
+GET http://localhost:3001/api/get-subsubcategory
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getById-subsubcategory/69f22467b2be77cfc57d2c87
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/Update_subsubcategory/69f22467b2be77cfc57d2c87
+
+###
+DELETE http://localhost:3001/api/subsubcategory/69f224b8b2be77cfc57d2c89
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-product           
+
+###
+put http://localhost:3001/api/update-product/6a2bb7e2d2301fa636ccda30
+
+###
+GET http://localhost:3001/api/getAllProducts
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/products
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/getAllMetalRates
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/getAllStoneRates
+Content-Type: application/json
+
+
+
+###
+GET http://localhost:3001/api/getall-contact  
+Content-Type: application/json
+
+
+###
+POST http://localhost:3001/api/create-contact  
+Content-Type: application/json
+
+{
+  "user":"6a13f56dbf6dce297ed289cc",
+  "name":"alksjdf",
+  "email":"a@gmail.com",
+  "phone":"9787987",
+  "subject":"adfasf",
+  "message":"adsfasf"
+}
+
+
+
+
+
+###
+GET http://localhost:3001/api/getProductsByType/TRENDING
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-product/6a1e7141c2aad3cac853ace3
+Content-Type: application/json 
+
+###
+PUT http://localhost:3001/api/update-product/6a033a151d9cd834dbc9c09a
+
+###
+DELETE http://localhost:3001/api/Deleteproduct/6a033a151d9cd834dbc9c09a
+Content-Type: application/json
+
+
+
+###
+POST http://localhost:3001/api/userregister
+Content-Type: application/json
+
+{
+  "name": "AnilKumar",
+  "email": "nani0607@gmail.com",
+  "password": "nani@111",
+  "phone": "8978971154"
+}
+
+###
+POST http://localhost:3001/api/userLogin
+Content-Type: application/json
+
+{
+  "phone": "8978971154",
+  "password": "nani@111"
+}
+
+# forgotpassword
+
+###
+POST http://localhost:3001/api/user-forgot-password
+Content-Type: application/json
+
+{
+  "email": "maddisettivennela184@gmail.com"
+}
+
+###
+POST http://localhost:3001/api/verify-otp
+Content-Type: application/json
+
+{
+  "email": "maddisettivennela184@gmail.com",
+  "otp": "934145"
+}
+
+###
+POST http://localhost:3001/api/resend-otp
+Content-Type: application/json
+
+{
+  "email": "maddisettivennela184@gmail.com"
+}
+
+###
+POST http://localhost:3001/api/user-reset-password
+Content-Type: application/json
+
+{
+  "email": "maddisettivennela184@gmail.com",
+  "newPassword": "newvenni"
+}
+
+
+
+
+###
+POST http://localhost:3001/api/addcart
+Content-Type: application/json
+
+{
+  "user": "69f4455430a4633b9cd12af6",
+  "product": "69f39ba893ece02cc479aa71",
+  "variantId": "69f39ba893ece02cc479aa72",
+  "quantity": 1
+}
+
+###
+GET http://localhost:3001/api/getcart/6a1e7141c2aad3cac853ace3
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/getProductsByCategory/6a0ff8d2c336f49446430815
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/cart/69f4fda00498cf0ca64fdbc0/item/69f4fda00498cf0ca64fdbc1
+Content-Type: application/json
+
+{
+  "quantity": 2
+}
+
+###
+PUT http://localhost:3001/api/clearCart/clear/
+Content-Type: application/json
+
+
+
+###
+DELETE http://localhost:3001/api/removeCart/6a147177f934c7d75178058a/item/6a147177f934c7d75178058b
+
+###
+POST http://localhost:3001/api/wishlist
+Content-Type: application/json
+
+{
+  "user": "69f58caa79f51a9e18332449",
+  "product": "69f39bc793ece02cc479aa75",
+  "variantId": "69f39cd593ece02cc479aa87"
+}
+
+###
+GET http://localhost:3001/api/wishlist/69f4455430a4633b9cd12af6
+Content-Type: application/json
+
+###
+DELETE http://localhost:3001/api/wishlist/69f510968be4dfb0e09d5609/item/69f510968be4dfb0e09d560a
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/Createaddress
+Content-Type: application/json
+
+{
+  "user": "69f6435c46e9fd840f071f61",
+  "fullName": " nani",
+  "phone": "9391551159",
+  "addressLine1": "House No 12",
+  "addressLine2": "Ramalayam Temple",
+  "city": "Bhimavaram",
+  "state": "Andhra Pradesh",
+  "pincode": "534239",
+  "country": "India",
+  "isDefault": true
+}
+
+###
+GET http://localhost:3001/api/address/69f6435c46e9fd840f071f61
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/updateaddress/69f51b79b0b4c1762439d775
+Content-Type: application/json
+
+{
+  "fullName": "Vennela New",
+  "phone": "9391551158",
+  "addressLine1": "Flat No 101",
+  "addressLine2": "Near Bus Stand",
+  "city": "Hyderabad",
+  "state": "Telangana",
+  "pincode": "500001",
+  "country": "India",
+  "isDefault": true
+}
+
+###
+DELETE http://localhost:3001/api/Deleteaddress/69f51b79b0b4c1762439d775
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getAllAddress
+Content-Type: application/json
+
+
+###
+POST  http://localhost:3001/api/createBanner
+
+###
+PUT   http://localhost:3001/api/updateBanner/69feb451d2d8e959478a5b61
+
+###
+GET http://localhost:3001/api/getAllBanners
+Content-Type: application/json
+
+###
+DELETE http://localhost:3001/api/deleteBanner/6a29424accc0673eacd1870c
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getAllUsers
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getUsersCount
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-subsubcategorybysubcategory/69ffdc0701f16f5297e6df51
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-subcategoryby-category/69f10a44326d005b487c377f
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-contact
+Content-Type: application/json
+
+{
+  "name": "Vennela",
+  "email": "vennela@gmail.com",
+  "phone": "9876543210",
+  "subject": "Diamond Ring",
+  "message": "Need diamond ring details"
+}
+
+###
+POST http://localhost:3001/api/create-coupon
+Content-Type: application/json
+
+{
+  "code": "OZO10",
+  "discountType": "PERCENTAGE",
+  "value": 10,
+  "minOrderAmount": 5000,
+  "expiryDate": "2026-12-31",
+  "isActive": true
+}
+
+###
+GET http://localhost:3001/api/getall-coupon
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getbyid-coupon/6a11d47c0606d6b0a7602281
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/updatecoupon/6a11d47c0606d6b0a7602281
+Content-Type: application/json
+
+{
+  "code": "OZO15",
+  "discountType": "PERCENTAGE",
+  "value": 15,
+  "minOrderAmount": 5000,
+  "expiryDate": "2026-12-31",
+  "isActive": true
+}
+
+###
+DELETE http://localhost:3001/api/Deletecoupon/6a11d47c0606d6b0a7602281
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-review
+
+###
+GET http://localhost:3001/api/getall-review
+Content-Type: application/json
+
+
+
+
+###
+POST http://localhost:3001/api/createMetalRate
+Content-Type: application/json
+
+{
+    
+    "metalType": "platinum",
+    "purity": "950",
+    "unit": "gram",
+    "ratePerGram": 4200,
+    "effectiveDate": "2026-06-01T00:00:00.000Z"
+
+}
+
+
+###
+POST http://localhost:3001/api/createStoneRate
+Content-Type: application/json
+
+{
+    "stoneType": "pearl",
+    "stoneCategory": "standard",
+    "quality": "A",
+    "unit": "piece",
+    "ratePerUnit": 1200
+}
+
+
+###
+POST http://localhost:3001/api/createOrder
+Content-Type: application/json
+
+{
+    "orderSource": "SUB_BRANCH",
+
+    "branch": "6a3912d97c3f96315204b938",
+
+    "subBranch": "6a3f9f101ad4a9c798bb8e32",
+
+    "createdBy": "6a3f9f101ad4a9c798bb8e32",
+
+    "customerDetails": {
+        "name": "Pradeep",
+        "phone": "8765432190",
+        "email": "pradeep@gmail.com"
+    },
+
+    "paymentMethod": "CASH",
+
+    "items": [
+        {
+            "product": "6a2bb7e2d2301fa636ccda30",
+            "variant": "6a2bc37ff79263ad81dc316b",
+            "quantity": 1
+        }
+    ],
+
+    "couponCode": "",
+
+    "notes": "Walk-in Customer"
+}
+
+###
+GET http://localhost:3001/api/getOrdersByUser/69f6435c46e9fd840f071f61
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getSubBranchOrders/6a3b56f3b5d4f12d8c8f111
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getBranchOrders/6a3912d97c3f96315204b938
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getAllOrders
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/get-order/6a9d1187c0d98c8e45720174
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/getOrder/6a4765f80722367874acb415
+Content-Type: application/json
+
+
+###
+GET  http://localhost:3001/api/get-order/6a44b25ba18361b785cb4c3e
+Content-Type: application/json
+
+###
+GET  http://localhost:3001/api/get-orders-by-user/6a32698734258cd3cea201d9
+Content-Type: application/json
+
+###
+DELETE http://localhost:3001/api/delete-order/6a48d1675eb185b5d68eeeaa
+Content-Type: application/json
+
+###
+put http://localhost:3001/api/update-order-status/6a2d0acb45de70dcb49519fb
+Content-Type: application/json
+
+{
+  "orderStatus": "Shipped"
+}
+
+###
+put http://localhost:3001/api/update-payment-status/6a2d0acb45de70dcb49519fb
+
+###
+GET http://localhost:3001/api/get-all-ads
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/createAds
+
+###
+GET http://localhost:3001/api/get-ads/6a365737aae6950c5eb036cd
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-employee
+
+###
+GET http://localhost:3001/api/get-all-employees
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-employeebyid/6a3a933e3e273477e846fca3
+Content-Type: application/json
+
+###
+put http://localhost:3001/api/update-employee/6a3a933e3e273477e846fca3
+
+###
+POST http://localhost:3001/api/assign-product
+Content-Type: application/json
+
+{
+    "subBranchId": "6a3d869a0ae43f3b7496fdab",
+    "productId": "6a1e7141c2aad3cac853ace3",
+    "variantId": "6a2840cb6356e0c8900c9329",
+    "quantity": 5
+}
+
+###
+GET http://localhost:3001/api/assigned-products/6a3d869a0ae43f3b7496fdab
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-scheme
+Content-Type: application/json
+
+{
+    "name": "Gold Saving Scheme",
+    "amount": 60000,
+    "durationMonths": 12,
+    "userPayMonths": 11,
+    "companyPayMonths": 1,
+    "monthlyAmount": 5000,
+    "description": "Pay for 11 months and company pays the 12th month."
+}
+
+###
+GET http://localhost:3001/api/get-all-schemes
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-scheme/6a51e57a86a5b9c0b3f28111
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/update-scheme/6a51e57a86a5b9c0b3f28111
+Content-Type: application/json
+
+{
+    "name": "Diamond Saving Scheme",
+    "amount": 120000,
+    "durationMonths": 12,
+    "userPayMonths": 11,
+    "companyPayMonths": 1,
+    "monthlyAmount": 10000,
+    "description": "Updated scheme description."
+}
+
+###
+PUT http://localhost:3001/api/update-scheme-status/6a51e57a86a5b9c0b3f28111
+Content-Type: application/json
+
+{
+    "isActive": true
+}
+
+
+
+###
+DELETE http://localhost:3001/api/delete-scheme/6a51e57a86a5b9c0b3f28111
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-user-scheme
+Content-Type: application/json
+
+{
+    "user": "69f6435c46e9fd840f071f61",
+    "scheme": "6a5370d26ec81ea57e57c85b",
+    "schemeAmount": 60000,
+    "monthlyAmount": 5000,
+    "startDate": "2026-07-11",
+    "endDate": "2027-06-11",
+    "paidMonths": 0,
+    "status": "ACTIVE"
+}
+
+###
+GET http://localhost:3001/api/get-all-user-schemes
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-user-scheme/6a51f387654da03b06e9cfaf
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/update-user-scheme/6a51f387654da03b06e9cfaf
+Content-Type: application/json
+
+{
+    "schemeAmount": 72000,
+    "monthlyAmount": 6000,
+    "paidMonths": 4,
+    "status": "ACTIVE"
+}
+
+
+###
+PUT http://localhost:3001/api/update-user-scheme-status/6a51f387654da03b06e9cfaf
+Content-Type: application/json
+
+{
+  "status": "COMPLETED"
+}
+
+###
+DELETE http://localhost:3001/api/delete-user-scheme/6a51f387654da03b06e9cfaf
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-all-size-charts
+Content-Type: application/json
+
+###
+POST http://localhost:3001/api/create-size-chart
+
+
+###
+POST http://localhost:3001/api/create-payment
+Content-Type: application/json
+
+{
+    "subscription": "6a51e57a86a5b9c0b3f28111",
+    "user": "6a2bf6dc9a89e91f73d21b1f",
+    "monthNo": 1,
+    "amount": 5000,
+    "paymentDate": "2026-07-11",
+    "paymentMode": "UPI",
+    "transactionId": "TXN100001",
+    "status": "PAID"
+}
+
+###
+GET http://localhost:3001/api/get-all-payments
+Content-Type: application/json
+
+###
+PUT http://localhost:3001/api/update-payment/6a51fa0bfcc22740fabdcff2
+Content-Type: application/json
+
+{
+    "monthNo": 2,
+    "amount": 6000,
+    "paymentDate": "2026-08-11",
+    "paymentMode": "CARD",
+    "transactionId": "TXN200001",
+    "status": "PAID"
+}
+
+###
+GET http://localhost:3001/api/get-payment/6a51fa0bfcc22740fabdcff2
+Content-Type: application/json
+
+###
+DELETE http://localhost:3001/api/delete-payment/6a51fde7a9d8e93eac4127a2
+Content-Type: application/json
+
+
+
+###
+GET http://localhost:3001/api/get-all-supplier-purchase-items
+Content-Type: application/json
+
+
+###
+GET http://localhost:3001/api/get-purchase-items/6a928d4798b45fdcfc794238
+Content-Type: application/json
