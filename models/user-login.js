@@ -4,10 +4,10 @@ const UserSchema = new mongoose.Schema({
   name: { type: String },
   phone: { type: String, required: true },
   email: {
-    type: String, 
+    type: String,
   },
   password: {
-    type: String, 
+    type: String,
   },
   token: {
     type: String
@@ -21,7 +21,7 @@ const UserSchema = new mongoose.Schema({
   OTP: { type: String },
   isVerified: {
     type: Boolean,
-    default: false, 
+    default: false,
   },
   OTPExpires: { type: Date },
 });

@@ -562,133 +562,132 @@ exports.getAllMakerProductionItems =
 // GET /get-production-items/:productionId
 // =====================================================
 
-exports.getProductionItems =
-    async (req, res) => {
+exports.getProductionItems = async (req, res) => {
 
-        try {
+    try {
 
-            const {
-                productionId
-            } = req.params;
-
-
-            // ==========================================
-            // VALIDATE ID
-            // ==========================================
-
-            if (
-                !isValidObjectId(productionId)
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Invalid Production ID"
-
-                });
-
-            }
+        const {
+            productionId
+        } = req.params;
 
 
-            // ==========================================
-            // CHECK PRODUCTION
-            // ==========================================
+        // ==========================================
+        // VALIDATE ID
+        // ==========================================
 
-            const production =
-                await MakerProduction.findById(
-                    productionId
-                );
+        if (
+            !isValidObjectId(productionId)
+        ) {
 
-
-            if (!production) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Maker production not found"
-
-                });
-
-            }
-
-
-            // ==========================================
-            // GET ITEMS
-            // ==========================================
-
-            const items =
-                await MakerProductionItem.find({
-
-                    production:
-                        productionId
-
-                })
-
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status notes"
-                    )
-
-                    .populate(
-                        "product"
-                    )
-
-                    .sort({
-                        createdAt: -1
-                    });
-
-
-            return res.status(200).json({
-
-                success: true,
-
-                production: {
-
-                    id:
-                        production._id,
-
-                    productionNumber:
-                        production.productionNumber,
-
-                    status:
-                        production.status
-
-                },
-
-                count:
-                    items.length,
-
-                data:
-                    items
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get Production Items Error:",
-                error
-            );
-
-
-            return res.status(500).json({
+            return res.status(400).json({
 
                 success: false,
 
                 message:
-                    error.message
+                    "Invalid Production ID"
 
             });
 
         }
 
-    };
+
+        // ==========================================
+        // CHECK PRODUCTION
+        // ==========================================
+
+        const production =
+            await MakerProduction.findById(
+                productionId
+            );
+
+
+        if (!production) {
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Maker production not found"
+
+            });
+
+        }
+
+
+        // ==========================================
+        // GET ITEMS
+        // ==========================================
+
+        const items =
+            await MakerProductionItem.find({
+
+                production:
+                    productionId
+
+            })
+
+                .populate(
+                    "production",
+                    "productionNumber issueDate expectedDate receivedDate status notes"
+                )
+
+                .populate(
+                    "product"
+                )
+
+                .sort({
+                    createdAt: -1
+                });
+
+
+        return res.status(200).json({
+
+            success: true,
+
+            production: {
+
+                id:
+                    production._id,
+
+                productionNumber:
+                    production.productionNumber,
+
+                status:
+                    production.status
+
+            },
+
+            count:
+                items.length,
+
+            data:
+                items
+
+        });
+
+    }
+
+    catch (error) {
+
+        console.log(
+            "Get Production Items Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                error.message
+
+        });
+
+    }
+
+};
 
 
 
