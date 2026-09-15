@@ -12,48 +12,51 @@ CREATE PRODUCT
 exports.createProduct = async (req, res) => {
 
   try {
-// =========================
-// REQUIRED VALIDATIONS
-// =========================
 
-if (!req.body.name?.trim()) {
-  return res.status(400).json({
-    success: false,
-    message: "Product name is required"
-  });
-}
+    // =========================
+    // REQUIRED VALIDATIONS
+    // =========================
 
-if (!req.body.category) {
-  return res.status(400).json({
-    success: false,
-    message: "Category is required"
-  });
-}
+    if (!req.body.name?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Product name is required"
+      });
+    }
 
-if (!req.body.subCategory) {
-  return res.status(400).json({
-    success: false,
-    message: "Sub Category is required"
-  });
-}
+    if (!req.body.category) {
+      return res.status(400).json({
+        success: false,
+        message: "Category is required"
+      });
+    }
 
-if (!req.body.productType) {
-  return res.status(400).json({
-    success: false,
-    message: "Product type is required"
-  });
-}
+    if (!req.body.subCategory) {
+      return res.status(400).json({
+        success: false,
+        message: "Sub Category is required"
+      });
+    }
 
-if (!req.body.description?.trim()) {
-  return res.status(400).json({
-    success: false,
-    message: "Description is required"
-  });
-}
-    
+    if (!req.body.productType) {
+      return res.status(400).json({
+        success: false,
+        message: "Product type is required"
+      });
+    }
+
+    if (!req.body.description?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Description is required"
+      });
+    }
+
+
     let imageUrls = [];
     let certificateUrl = "";
     let videoUrl = "";
+
 
     // =========================
     // PRODUCT IMAGES UPLOAD
@@ -84,12 +87,17 @@ if (!req.body.description?.trim()) {
         imageUrls.push(result.secure_url);
       }
     }
+
+
     if (imageUrls.length === 0) {
-  return res.status(400).json({
-    success: false,
-    message: "At least one product image is required"
-  });
-}
+
+      return res.status(400).json({
+        success: false,
+        message: "At least one product image is required"
+      });
+
+    }
+
 
     // =========================
     // CERTIFICATE UPLOAD
@@ -124,6 +132,7 @@ if (!req.body.description?.trim()) {
         certResult.secure_url;
     }
 
+
     // =========================
     // VIDEO UPLOAD
     // =========================
@@ -157,6 +166,7 @@ if (!req.body.description?.trim()) {
         videoResult.secure_url;
     }
 
+
     // =========================
     // PARSE VARIANTS
     // =========================
@@ -166,60 +176,184 @@ if (!req.body.description?.trim()) {
         ? JSON.parse(req.body.variants)
         : [];
 
-        if (!variants.length) {
-  return res.status(400).json({
-    success: false,
-    message: "At least one variant is required"
-  });
-}
 
-for (const variant of variants) {
+    if (!variants.length) {
 
-  if (!variant.sku?.trim()) {
-    return res.status(400).json({
-      success: false,
-      message: "SKU is required"
-    });
-  }
+      return res.status(400).json({
+        success: false,
+        message: "At least one variant is required"
+      });
 
-  if (
-    variant.stock === undefined ||
-    variant.stock === null
-  ) {
-    return res.status(400).json({
-      success: false,
-      message: `Stock is required for SKU '${variant.sku}'`
-    });
-  }
+    }
 
-  if (!variant.metalType) {
-    return res.status(400).json({
-      success: false,
-      message: `Metal type is required for SKU '${variant.sku}'`
-    });
-  }
 
-  if (!variant.metalPurity) {
-    return res.status(400).json({
-      success: false,
-      message: `Metal purity is required for SKU '${variant.sku}'`
-    });
-  }
+    // =====================================================
+    // AUTO GENERATE SKU
+    // FORMAT:
+    // OZO + YYYYMMDD + 001
+    // =====================================================
 
-  if (!variant.grossWeight) {
-    return res.status(400).json({
-      success: false,
-      message: `Gross weight is required for SKU '${variant.sku}'`
-    });
-  }
+    const now = new Date();
 
-  if (!variant.netWeight) {
-    return res.status(400).json({
-      success: false,
-      message: `Net weight is required for SKU '${variant.sku}'`
-    });
-  }
-}
+    const year =
+      now.getFullYear();
+
+    const month =
+      String(now.getMonth() + 1)
+        .padStart(2, "0");
+
+    const day =
+      String(now.getDate())
+        .padStart(2, "0");
+
+
+    const datePrefix =
+      `OZO${year}${month}${day}`;
+
+
+    // =====================================================
+    // FIND LAST SKU CREATED TODAY
+    // =====================================================
+
+    const lastProduct =
+      await Product.findOne({
+        "variants.sku": {
+          $regex: `^${datePrefix}[0-9]{3}$`
+        }
+      })
+        .sort({
+          createdAt: -1
+        })
+        .lean();
+
+
+    let nextNumber = 1;
+
+
+    if (lastProduct?.variants?.length) {
+
+      const todaySkus =
+        lastProduct.variants
+          .map(v => v.sku)
+          .filter(sku =>
+            sku &&
+            sku.startsWith(datePrefix)
+          );
+
+
+      if (todaySkus.length) {
+
+        const numbers =
+          todaySkus.map(sku =>
+            parseInt(
+              sku.substring(datePrefix.length),
+              10
+            )
+          );
+
+
+        const maxNumber =
+          Math.max(...numbers);
+
+
+        nextNumber =
+          maxNumber + 1;
+      }
+    }
+
+
+    // =====================================================
+    // GENERATE SKU FOR EVERY VARIANT
+    // =====================================================
+
+    variants =
+      variants.map((variant) => {
+
+        const skuNumber =
+          String(nextNumber)
+            .padStart(3, "0");
+
+
+        const generatedSku =
+          `${datePrefix}${skuNumber}`;
+
+
+        nextNumber++;
+
+
+        return {
+          ...variant,
+          sku: generatedSku
+        };
+
+      });
+
+
+    // =====================================================
+    // VALIDATE VARIANTS
+    // =====================================================
+
+    for (const variant of variants) {
+
+      if (
+        variant.stock === undefined ||
+        variant.stock === null
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            `Stock is required for SKU '${variant.sku}'`
+        });
+
+      }
+
+
+      if (!variant.metalType) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            `Metal type is required for SKU '${variant.sku}'`
+        });
+
+      }
+
+
+      if (!variant.metalPurity) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            `Metal purity is required for SKU '${variant.sku}'`
+        });
+
+      }
+
+
+      if (!variant.grossWeight) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            `Gross weight is required for SKU '${variant.sku}'`
+        });
+
+      }
+
+
+      if (!variant.netWeight) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            `Net weight is required for SKU '${variant.sku}'`
+        });
+
+      }
+
+    }
+
 
     // =========================
     // PARSE TAGS
@@ -230,6 +364,7 @@ for (const variant of variants) {
         ? JSON.parse(req.body.tags)
         : [];
 
+
     // =========================
     // PARSE META KEYWORDS
     // =========================
@@ -239,64 +374,59 @@ for (const variant of variants) {
         ? JSON.parse(req.body.metaKeywords)
         : [];
 
-        // =========================
-// UNIQUE VALIDATIONS
-// =========================
 
-// SLUG
+    // =========================
+    // UNIQUE VALIDATIONS
+    // =========================
 
-if (req.body.slug) {
+    // =========================
+    // SLUG
+    // =========================
 
-  const existingSlug =
-    await Product.findOne({
-      slug: req.body.slug.trim()
-    });
+    if (req.body.slug) {
 
-  if (existingSlug) {
-    return res.status(409).json({
-      success: false,
-      message: `Slug '${req.body.slug}' already exists`
-    });
-  }
-}
+      const existingSlug =
+        await Product.findOne({
+          slug: req.body.slug.trim()
+        });
 
-// HALLMARK
+      if (existingSlug) {
 
-if (req.body.hallmarkNumber) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `Slug '${req.body.slug}' already exists`
+        });
 
-  const existingHallmark =
-    await Product.findOne({
-      hallmarkNumber:
-        req.body.hallmarkNumber.trim()
-    });
+      }
 
-  if (existingHallmark) {
-    return res.status(409).json({
-      success: false,
-      message:
-        `Hallmark Number '${req.body.hallmarkNumber}' already exists`
-    });
-  }
-}
+    }
 
-// SKU
 
-for (const variant of variants) {
+    // =========================
+    // HALLMARK
+    // =========================
 
-  const existingSku =
-    await Product.findOne({
-      "variants.sku":
-        variant.sku.trim()
-    });
+    if (req.body.hallmarkNumber) {
 
-  if (existingSku) {
-    return res.status(409).json({
-      success: false,
-      message:
-        `SKU '${variant.sku}' already exists`
-    });
-  }
-}
+      const existingHallmark =
+        await Product.findOne({
+          hallmarkNumber:
+            req.body.hallmarkNumber.trim()
+        });
+
+      if (existingHallmark) {
+
+        return res.status(409).json({
+          success: false,
+          message:
+            `Hallmark Number '${req.body.hallmarkNumber}' already exists`
+        });
+
+      }
+
+    }
+
 
     // =========================
     // PRODUCT CREATE
@@ -381,7 +511,13 @@ for (const variant of variants) {
 
         isActive:
           req.body.isActive !== "false"
+
       });
+
+
+    // =========================
+    // SUCCESS RESPONSE
+    // =========================
 
     res.status(201).json({
 
@@ -395,201 +531,44 @@ for (const variant of variants) {
 
     });
 
+
   } catch (error) {
 
-  console.error(error);
+    console.error(error);
 
-  if (error.code === 11000) {
 
-    const field =
-      Object.keys(error.keyValue)[0];
+    if (error.code === 11000) {
 
-    const value =
-      error.keyValue[field];
+      const field =
+        Object.keys(error.keyValue)[0];
 
-    return res.status(409).json({
+      const value =
+        error.keyValue[field];
+
+      return res.status(409).json({
+
+        success: false,
+
+        message:
+          `${field} '${value}' already exists`
+
+      });
+
+    }
+
+
+    res.status(500).json({
+
       success: false,
+
       message:
-        `${field} '${value}' already exists`
+        error.message
+
     });
 
   }
 
-  res.status(500).json({
-    success: false,
-    message:
-      error.message
-  });
-
-}
-
 };
-// exports.createProduct = async (req, res) => {
-
-//   try {
-
-//     let imageUrls = [];
-
-//     let certificateUrl = "";
-
-//     let videoUrl = "";
-
-//     // =========================
-//     // PRODUCT IMAGES UPLOAD
-//     // =========================
-//     if (req.files?.images?.length > 0) {
-
-//       for (const file of req.files.images) {
-
-//         const result = await new Promise(
-//           (resolve, reject) => {
-
-//             cloudinary.uploader.upload_stream(
-
-//               {
-//                 folder: "products"
-//               },
-
-//               (error, result) => {
-
-//                 if (error)
-//                   reject(error);
-
-//                 else
-//                   resolve(result);
-
-//               }
-
-//             ).end(file.buffer);
-
-//           }
-//         );
-
-//         imageUrls.push(result.secure_url);
-
-//       }
-
-//     }
-
-//     // =========================
-//     // CERTIFICATE UPLOAD
-//     // =========================
-//     if (
-//       req.files?.certificate?.length > 0
-//     ) {
-
-//       const certFile =
-//         req.files.certificate[0];
-
-//       const certResult =
-//         await new Promise(
-//           (resolve, reject) => {
-
-//             cloudinary.uploader.upload_stream(
-
-//               {
-//                 folder: "certificates",
-//                 resource_type: "auto"
-//               },
-
-//               (error, result) => {
-
-//                 if (error)
-//                   reject(error);
-
-//                 else
-//                   resolve(result);
-
-//               }
-
-//             ).end(certFile.buffer);
-
-//           }
-//         );
-
-//       certificateUrl =
-//         certResult.secure_url;
-
-//     }
-
-//     // =========================
-//     // VARIANTS PARSE
-//     // =========================
-//     let variants = req.body.variants
-//       ? JSON.parse(req.body.variants)
-//       : [];
-
-//     // =========================
-//     // CERTIFICATE URL ADD
-//     // =========================
-//     variants = variants.map(
-//       (variant) => ({
-
-//         ...variant,
-
-//         diamonds:
-//           variant.diamonds?.map(
-//             (diamond) => ({
-
-//               ...diamond,
-
-//               certificateUrl:
-//                 certificateUrl
-
-//             })
-//           ) || []
-
-//       })
-//     );
-
-//     // =========================
-//     // CREATE PRODUCT
-//     // =========================
-//     const product =
-//       await Product.create({
-
-//         ...req.body,
-
-//         variants,
-
-//         tags:
-//           req.body.tags
-//             ? JSON.parse(req.body.tags)
-//             : [],
-
-//         images:
-//           imageUrls,
-//         video: videoUrl
-
-
-//       });
-
-//     res.status(201).json({
-
-//       success: true,
-
-//       message:
-//         "Product created successfully",
-
-//       data:
-//         product
-
-//     });
-
-//   } catch (error) {
-
-//     res.status(500).json({
-
-//       success: false,
-
-//       message:
-//         error.message
-
-//     });
-
-//   }
-
-// };
 
 exports.updateProduct = async (req, res) => {
 
