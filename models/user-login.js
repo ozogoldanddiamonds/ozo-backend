@@ -29,7 +29,6 @@ const UserSchema = new mongoose.Schema({
   OTPExpires: { type: Date },
 });
 
-// module.exports = mongoose.model("user", UserSchema);
 module.exports =
   mongoose.models.User ||
   mongoose.model(

@@ -506,11 +506,18 @@ exports.getAllMakerProductionItems =
             const items =
                 await MakerProductionItem.find()
 
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status notes"
-                    )
+                    // Production + Maker
+                    .populate({
+                        path: "production",
+                        select:
+                            "productionNumber issueDate expectedDate receivedDate status notes maker",
+                        populate: {
+                            path: "maker",
+                            select: "name phone"
+                        }
+                    })
 
+                    // Product
                     .populate(
                         "product"
                     )
@@ -554,7 +561,6 @@ exports.getAllMakerProductionItems =
         }
 
     };
-
 
 
 // =====================================================
