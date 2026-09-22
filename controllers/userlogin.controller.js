@@ -4,11 +4,9 @@ const jwt = require("jsonwebtoken");
 const Cart = require("../models/cart");
 const Wishlist = require("../models/wishlist");
 const Order = require("../models/order");
-const {
-  transporter
-} = require(
-  "../middleware/mail"
-);
+const { transporter } = require("../middleware/mail");
+const { OAuth2Client } = require("google-auth-library");
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 /*
 REGISTER
 */
@@ -655,4 +653,105 @@ exports.userLogout = async (req, res) => {
       message: error.message
     });
   }
+};
+
+
+// google with email
+exports.googleLogin = async (req, res) => {
+
+  try {
+
+    const { credential } = req.body;
+
+    if (!credential) {
+      return res.status(400).json({
+        success: false,
+        message: "Google credential is required"
+      });
+    }
+
+    // Verify Google credential
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+
+    const payload = ticket.getPayload();
+
+    const googleId = payload.sub;
+    const email = payload.email;
+    const name = payload.name;
+
+    // Find user by email
+    let user = await User.findOne({
+      email: email.toLowerCase()
+    });
+
+    // Existing user
+    if (user) {
+
+      user.googleId = googleId;
+      user.isVerified = true;
+
+    }
+
+    // New Google user
+    else {
+
+      user = await User.create({
+
+        name: name || "",
+
+        email: email.toLowerCase(),
+
+        phone: "",
+
+        password: "",
+
+        googleId: googleId,
+
+        isVerified: true
+
+      });
+
+    }
+
+    // Create JWT
+    const token = jwt.sign(
+      {
+        userId: user._id
+      },
+      "secretKey",
+      {
+        expiresIn: "7d"
+      }
+    );
+
+    user.token = token;
+
+    await user.save();
+
+    return res.status(200).json({
+
+      success: true,
+
+      message: "Google login successful",
+
+      token: token,
+
+      user: user
+
+    });
+
+  } catch (error) {
+
+    console.log("Google Login Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+
+  }
+
 };

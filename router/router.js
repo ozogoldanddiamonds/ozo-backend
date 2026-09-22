@@ -12,7 +12,7 @@ const { createCategory, getAllCategories, getCategoryById, updateCategory, delet
 const { getSubCategoryByCategory, createSubCategory, getAllSubCategories, getSubCategoryById, updateSubCategory, deleteSubCategory } = require("../controllers/subcategory.controller");
 const { getSubSubCategoryBySubCategory, createSubSubCategory, getAllSubSubCategories, getSubSubCategoryById, updateSubSubCategory, deleteSubSubCategory } = require("../controllers/subsubcategory.controller");
 const { createProduct, getAllProducts, getAllProductsWithPagination, getProductsByType, getProductById, updateProduct, deleteProduct, getProductsByCategory, getProductsByCategoryId, changeProductStatus } = require("../controllers/product.controller");
-const { getAllUsers, getUsersCount, getProfileSummary, userLogout, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword } = require("../controllers/userlogin.controller");
+const { getAllUsers, getUsersCount, getProfileSummary, userLogout, googleLogin, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword } = require("../controllers/userlogin.controller");
 const { addToCart, getCart, updateCartItem, removeCartItem, clearCart } = require("../controllers/cart.controller");
 const { addToWishlist, getWishlist, removeWishlistItem } = require("../controllers/wishlist.controller");
 const { createAddress, getAddresses, getAddressById, updateAddress, deleteAddress, getAllAddresses, setDefaultAddress } = require("../controllers/address.controller");
@@ -125,6 +125,7 @@ router.get("/getAllUsers", getAllUsers);
 router.get("/getUsersCount", getUsersCount);
 router.get("/profileSummary/:userId", getProfileSummary);
 router.post("/logout", userLogout);
+router.post("/gmailLogin", googleLogin);
 
 
 
