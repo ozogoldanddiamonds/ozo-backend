@@ -7,7 +7,6 @@ const Product = require("../models/product");
 // =====================================================
 
 exports.createSupplierPurchaseItem = async (req, res) => {
-
     try {
 
         const {
@@ -25,347 +24,212 @@ exports.createSupplierPurchaseItem = async (req, res) => {
         } = req.body;
 
 
-        // =====================================================
-        // BASIC VALIDATION
-        // =====================================================
+        // ==========================================
+        // 1. BASIC VALIDATION
+        // ==========================================
 
         if (!purchase) {
-
             return res.status(400).json({
                 success: false,
                 message: "Purchase is required"
             });
-
         }
 
-
         if (!product) {
-
             return res.status(400).json({
                 success: false,
                 message: "Product is required"
             });
-
         }
-
 
         if (!variantId) {
-
             return res.status(400).json({
                 success: false,
-                message: "Product variant is required"
+                message: "Variant is required"
             });
-
         }
-
-
-        // =====================================================
-        // QUANTITY VALIDATION
-        // =====================================================
 
         const purchaseQuantity = Number(quantity);
 
-        if (
-            !Number.isFinite(purchaseQuantity) ||
-            purchaseQuantity < 1
-        ) {
-
+        if (!purchaseQuantity || purchaseQuantity < 1) {
             return res.status(400).json({
                 success: false,
-                message: "Valid quantity is required"
+                message: "Quantity must be greater than 0"
             });
-
         }
 
 
-        // =====================================================
-        // PURCHASE PRICE VALIDATION
-        // =====================================================
+        // ==========================================
+        // 2. CHECK SUPPLIER PURCHASE
+        // ==========================================
 
-        const price = Number(purchasePrice);
+        const purchaseExists = await SupplierPurchase.findById(purchase);
 
-        if (
-            !Number.isFinite(price) ||
-            price < 0
-        ) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Valid purchase price is required"
-            });
-
-        }
-
-
-        // =====================================================
-        // DISCOUNT VALIDATION
-        // =====================================================
-
-        const discountAmount = Number(discount) || 0;
-
-        if (discountAmount < 0) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Discount cannot be negative"
-            });
-
-        }
-
-
-        // =====================================================
-        // TAX VALIDATION
-        // =====================================================
-
-        const taxPercentage = Number(tax) || 0;
-
-        if (taxPercentage < 0) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Tax cannot be negative"
-            });
-
-        }
-
-
-        // =====================================================
-        // TOTAL AMOUNT
-        // =====================================================
-
-        const itemTotalAmount = Number(totalAmount);
-
-        if (
-            !Number.isFinite(itemTotalAmount) ||
-            itemTotalAmount < 0
-        ) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Valid total amount is required"
-            });
-
-        }
-
-
-        // =====================================================
-        // CHECK SUPPLIER PURCHASE
-        // =====================================================
-
-        const existingPurchase =
-            await SupplierPurchase.findById(purchase);
-
-        if (!existingPurchase) {
-
+        if (!purchaseExists) {
             return res.status(404).json({
                 success: false,
-                message: "Supplier purchase not found"
+                message: "Supplier Purchase not found"
             });
-
         }
 
 
-        // =====================================================
-        // CHECK PRODUCT
-        // =====================================================
+        // ==========================================
+        // 3. CHECK PRODUCT
+        // ==========================================
 
-        const existingProduct =
-            await Product.findById(product);
+        const existingProduct = await Product.findById(product);
 
         if (!existingProduct) {
-
             return res.status(404).json({
                 success: false,
                 message: "Product not found"
             });
-
         }
 
 
-        // =====================================================
-        // CHECK VARIANT
-        // =====================================================
+        // ==========================================
+        // 4. CHECK VARIANT INSIDE PRODUCT
+        // ==========================================
 
-        const selectedVariant =
-            existingProduct.variants?.find(
-
-                variant =>
-                    String(variant._id) ===
-                    String(variantId)
-
-            );
-
+        const selectedVariant = existingProduct.variants.find(
+            variant =>
+                String(variant._id) === String(variantId)
+        );
 
         if (!selectedVariant) {
-
             return res.status(404).json({
                 success: false,
-                message:
-                    "Variant not found in selected product"
+                message: "Variant not found in selected product"
             });
-
         }
 
 
-        // =====================================================
-        // DUPLICATE ITEM CHECK
-        // =====================================================
-        //
-        // Same product + same variant should not be added
-        // twice to the SAME invoice.
-        //
-        // Example:
-        //
-        // Invoice INV-1001
-        //
-        // Gold Ring / SKU-001  -> already exists
-        //
-        // Adding Gold Ring / SKU-001 again
-        // should be rejected.
-        //
-        // =====================================================
+        // ==========================================
+        // 5. CHECK DUPLICATE ITEM
+        // ==========================================
 
-        const existingItem =
-            await SupplierPurchaseItem.findOne({
-
-                purchase: purchase,
-                product: product,
-                variantId: variantId
-
-            });
-
+        const existingItem = await SupplierPurchaseItem.findOne({
+            purchase: purchase,
+            product: product,
+            variantId: variantId
+        });
 
         if (existingItem) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "This product variant is already added to this purchase"
-
+                message: "This product variant is already added to this purchase"
             });
-
         }
 
 
-        // =====================================================
-        // AVAILABLE QUANTITY
-        // =====================================================
-        //
-        // Initially:
-        //
-        // quantity = 10
-        // availableQuantity = 10
-        //
-        // Later sales/stock consumption can reduce
-        // availableQuantity.
-        //
-        // =====================================================
+        // ==========================================
+        // 6. CREATE SUPPLIER PURCHASE ITEM
+        // ==========================================
 
-        const availableQuantity =
-            purchaseQuantity;
+        const newItem = await SupplierPurchaseItem.create({
 
+            purchase: purchase,
 
-        // =====================================================
-        // CREATE SUPPLIER PURCHASE ITEM
-        // =====================================================
+            product: product,
 
-        const item =
-            await SupplierPurchaseItem.create({
+            variantId: variantId,
 
-                purchase: purchase,
+            quantity: purchaseQuantity,
 
-                product: product,
+            // Initially available quantity
+            availableQuantity: purchaseQuantity,
 
-                variantId: variantId,
+            purchasePrice: Number(purchasePrice) || 0,
 
-                quantity: purchaseQuantity,
+            supplierProductCode:
+                supplierProductCode || "",
 
-                availableQuantity: availableQuantity,
+            batchNumber:
+                batchNumber || "",
 
-                purchasePrice: price,
+            discount:
+                Number(discount) || 0,
 
-                supplierProductCode:
-                    supplierProductCode?.trim() || "",
+            tax:
+                Number(tax) || 0,
 
-                batchNumber:
-                    batchNumber?.trim() || "",
+            totalAmount:
+                Number(totalAmount) || 0,
 
-                discount:
-                    discountAmount,
-
-                tax:
-                    taxPercentage,
-
-                totalAmount:
-                    itemTotalAmount,
-
-                notes:
-                    notes?.trim() || ""
-
-            });
+            notes:
+                notes || ""
+        });
 
 
-        // =====================================================
-        // POPULATE PURCHASE + SUPPLIER + PRODUCT
-        // =====================================================
+        // ==========================================
+        // 7. UPDATE PRODUCT VARIANT STOCK
+        // ==========================================
 
-        await item.populate([
-
-            {
-                path: "purchase",
-
-                populate: {
-                    path: "supplier"
-                }
-
-            },
-
-            {
-                path: "product"
-            }
-
-        ]);
+        // Current stock
+        const oldStock =
+            Number(selectedVariant.stock) || 0;
 
 
-        // =====================================================
-        // SUCCESS RESPONSE
-        // =====================================================
+        // Add purchased quantity
+        const newStock =
+            oldStock + purchaseQuantity;
+
+
+        // Update variant stock
+        selectedVariant.stock = newStock;
+
+
+        // Save Product
+        await existingProduct.save();
+
+
+        // ==========================================
+        // 8. POPULATE RESPONSE
+        // ==========================================
+
+        const populatedItem =
+            await SupplierPurchaseItem.findById(newItem._id)
+                .populate("purchase")
+                .populate("product");
+
+
+        // ==========================================
+        // 9. SUCCESS RESPONSE
+        // ==========================================
 
         return res.status(201).json({
 
             success: true,
 
             message:
-                "Supplier purchase item created successfully",
+                "Supplier Purchase Item created and product stock updated successfully",
 
-            data: item
+            data: populatedItem,
 
+            stock: {
+                previousStock: oldStock,
+
+                purchasedQuantity: purchaseQuantity,
+
+                currentStock: newStock
+            }
         });
 
-    }
 
+    } catch (error) {
 
-    catch (error) {
-
-        console.log(
+        console.error(
             "Create Supplier Purchase Item Error:",
             error
         );
-
 
         return res.status(500).json({
 
             success: false,
 
-            message:
-                error.message
-
+            message: error.message
         });
-
     }
-
 };
 // =====================================================
 // GET ALL SUPPLIER PURCHASE ITEMS

@@ -22,7 +22,6 @@ const isValidObjectId = (id) => {
 // =====================================================
 
 exports.createMakerProductionItem = async (req, res) => {
-
     try {
 
         const {
@@ -31,467 +30,246 @@ exports.createMakerProductionItem = async (req, res) => {
             variantId,
             quantityGiven,
             quantityReceived,
-            batchNumber,
             notes
         } = req.body;
 
 
-        // =====================================================
-        // REQUIRED VALIDATIONS
-        // =====================================================
+        // ==========================================
+        // 1. BASIC VALIDATION
+        // ==========================================
 
         if (!production) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Production is required"
-
+                message: "Production is required"
             });
-
         }
-
 
         if (!product) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Product is required"
-
+                message: "Product is required"
             });
-
         }
-
 
         if (!variantId) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Variant is required"
-
+                message: "Variant is required"
             });
-
         }
 
 
-        if (
-            quantityGiven === undefined ||
-            quantityGiven === null ||
-            quantityGiven === ""
-        ) {
+        // ==========================================
+        // 2. QUANTITY VALIDATION
+        // ==========================================
 
+        const given = Number(quantityGiven);
+
+        const received =
+            quantityReceived === undefined ||
+                quantityReceived === null ||
+                quantityReceived === ""
+                ? 0
+                : Number(quantityReceived);
+
+
+        if (!given || given < 1) {
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Quantity Given is required"
-
+                message: "Quantity given must be greater than 0"
             });
-
         }
 
 
-        // =====================================================
-        // OBJECT ID VALIDATION
-        // =====================================================
-
-        if (!isValidObjectId(production)) {
-
+        if (received < 0) {
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Invalid Production ID"
-
+                message: "Quantity received cannot be negative"
             });
-
         }
 
-
-        if (!isValidObjectId(product)) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Invalid Product ID"
-
-            });
-
-        }
-
-
-        if (!isValidObjectId(variantId)) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Invalid Variant ID"
-
-            });
-
-        }
-
-
-        // =====================================================
-        // QUANTITY GIVEN VALIDATION
-        // =====================================================
-
-        const given =
-            Number(quantityGiven);
-
-
-        if (
-            !Number.isFinite(given) ||
-            given < 1
-        ) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Quantity Given must be at least 1"
-
-            });
-
-        }
-
-
-        // =====================================================
-        // QUANTITY RECEIVED VALIDATION
-        // =====================================================
-
-        let received = 0;
-
-
-        if (
-            quantityReceived !== undefined &&
-            quantityReceived !== null &&
-            quantityReceived !== ""
-        ) {
-
-            received =
-                Number(quantityReceived);
-
-
-            if (
-                !Number.isFinite(received) ||
-                received < 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Quantity Received must be 0 or greater"
-
-                });
-
-            }
-
-        }
-
-
-        // =====================================================
-        // RECEIVED CANNOT EXCEED GIVEN
-        // =====================================================
 
         if (received > given) {
-
             return res.status(400).json({
-
                 success: false,
-
                 message:
-                    "Quantity Received cannot be greater than Quantity Given"
-
+                    "Quantity received cannot be greater than quantity given"
             });
-
         }
 
 
-        // =====================================================
-        // BATCH NUMBER
-        // =====================================================
-
-        const normalizedBatchNumber =
-            batchNumber?.trim() || "";
-
-
-        // =====================================================
-        // CHECK PRODUCTION
-        // =====================================================
+        // ==========================================
+        // 3. CHECK MAKER PRODUCTION
+        // ==========================================
 
         const productionExists =
-            await MakerProduction.findById(
-                production
-            );
-
+            await MakerProduction.findById(production);
 
         if (!productionExists) {
-
             return res.status(404).json({
-
                 success: false,
-
-                message:
-                    "Maker production not found"
-
+                message: "Maker Production not found"
             });
-
         }
 
 
-        // =====================================================
-        // CHECK PRODUCT
-        // =====================================================
+        // ==========================================
+        // 4. CHECK PRODUCT
+        // ==========================================
 
-        const productExists =
-            await Product.findById(
-                product
-            );
+        const existingProduct =
+            await Product.findById(product);
 
-
-        if (!productExists) {
-
+        if (!existingProduct) {
             return res.status(404).json({
-
                 success: false,
-
-                message:
-                    "Product not found"
-
+                message: "Product not found"
             });
-
         }
 
 
-        // =====================================================
-        // CHECK VARIANT
-        // =====================================================
+        // ==========================================
+        // 5. FIND SELECTED VARIANT
+        // ==========================================
 
         const selectedVariant =
-            productExists.variants?.find(
-
+            existingProduct.variants.find(
                 variant =>
-
                     String(variant._id) ===
                     String(variantId)
-
             );
 
 
         if (!selectedVariant) {
-
             return res.status(404).json({
-
                 success: false,
-
                 message:
                     "Variant not found in selected product"
-
             });
-
         }
 
 
-        // =====================================================
-        // DUPLICATE ITEM CHECK
-        // =====================================================
-        //
-        // Same Product + Variant + Batch
-        // cannot be added twice to the same production.
-        //
-        // Different batch numbers are allowed.
-        //
-        // Example:
-        //
-        // Gold Ring / SKU-001 / BATCH-001  ✅
-        // Gold Ring / SKU-001 / BATCH-002  ✅
-        // Gold Ring / SKU-001 / BATCH-001  ❌
-        //
-        // =====================================================
-
-        const duplicateQuery = {
-
-            production,
-
-            product,
-
-            variantId
-
-        };
-
-
-        // If batch number is provided,
-        // compare the exact batch number.
-        if (normalizedBatchNumber) {
-
-            duplicateQuery.batchNumber =
-                normalizedBatchNumber;
-
-        }
-        else {
-
-            // If no batch number is provided,
-            // only another empty batch record is duplicate.
-            duplicateQuery.$or = [
-
-                {
-                    batchNumber: ""
-                },
-
-                {
-                    batchNumber: {
-                        $exists: false
-                    }
-                }
-
-            ];
-
-        }
-
+        // ==========================================
+        // 6. CHECK DUPLICATE ITEM
+        // ==========================================
 
         const existingItem =
-            await MakerProductionItem.findOne(
-                duplicateQuery
-            );
+            await MakerProductionItem.findOne({
+                production: production,
+                product: product,
+                variantId: variantId
+            });
 
 
         if (existingItem) {
-
-            return res.status(409).json({
-
+            return res.status(400).json({
                 success: false,
-
                 message:
-                    "This product variant with the same batch number is already added to the production"
-
+                    "This product variant is already added to this production"
             });
-
         }
 
 
-        // =====================================================
-        // AVAILABLE QUANTITY
-        // =====================================================
-        //
-        // Initially available quantity is the quantity
-        // received from maker.
-        //
-        // Example:
-        //
-        // quantityGiven    = 10
-        // quantityReceived = 8
-        // availableQuantity = 8
-        //
-        // =====================================================
+        // ==========================================
+        // 7. CREATE MAKER PRODUCTION ITEM
+        // ==========================================
 
-        const availableQuantity =
-            received;
-
-
-        // =====================================================
-        // CREATE ITEM
-        // =====================================================
-
-        const item =
+        const newItem =
             await MakerProductionItem.create({
 
-                production,
+                production: production,
 
-                product,
+                product: product,
 
-                variantId,
+                variantId: variantId,
 
-                quantityGiven:
-                    given,
+                quantityGiven: given,
 
-                quantityReceived:
-                    received,
+                quantityReceived: received,
 
-                availableQuantity:
-                    availableQuantity,
+                availableQuantity: received,
 
-                batchNumber:
-                    normalizedBatchNumber,
-
-                notes:
-                    notes?.trim() || ""
-
+                notes: notes || ""
             });
 
 
-        // =====================================================
-        // POPULATE
-        // =====================================================
+        // ==========================================
+        // 8. UPDATE PRODUCT VARIANT STOCK
+        // ONLY RECEIVED QUANTITY
+        // ==========================================
 
-        await item.populate([
-
-            {
-                path: "production"
-            },
-
-            {
-                path: "product"
-            }
-
-        ]);
+        const oldStock =
+            Number(selectedVariant.stock) || 0;
 
 
-        // =====================================================
-        // SUCCESS
-        // =====================================================
+        // Maker ki ichina quantity stock ki ADD cheyyakudadhu.
+        // Only maker daggara nundi received quantity
+        // Product stock ki add cheyyali.
+
+        const newStock =
+            oldStock + received;
+
+
+        selectedVariant.stock = newStock;
+
+
+        // Save Product
+        await existingProduct.save();
+
+
+        // ==========================================
+        // 9. POPULATE RESPONSE
+        // ==========================================
+
+        const populatedItem =
+            await MakerProductionItem.findById(
+                newItem._id
+            )
+                .populate("production")
+                .populate("product");
+
+
+        // ==========================================
+        // 10. SUCCESS RESPONSE
+        // ==========================================
 
         return res.status(201).json({
 
             success: true,
 
             message:
-                "Maker production item created successfully",
+                "Maker Production Item created and product stock updated successfully",
 
-            data:
-                item
+            data: populatedItem,
 
+            stock: {
+
+                previousStock: oldStock,
+
+                quantityGiven: given,
+
+                quantityReceived: received,
+
+                currentStock: newStock
+            }
         });
 
-    }
 
+    } catch (error) {
 
-    catch (error) {
-
-        console.log(
+        console.error(
             "Create Maker Production Item Error:",
             error
         );
-
 
         return res.status(500).json({
 
             success: false,
 
-            message:
-                error.message
-
+            message: error.message
         });
-
     }
-
 };
 // =====================================================
 // GET ALL MAKER PRODUCTION ITEMS
