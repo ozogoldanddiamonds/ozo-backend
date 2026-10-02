@@ -1,27 +1,26 @@
 POST http://localhost:3001/api/register
 Content-Type: application/json
 
-{
-  "name": "Admin",
-  "email": "info@ozogoldanddiamonds.com",
-  "password": "ozo@2026",
-  "role": "BRANCH",
-  "permissions": [
-    "ADD_PRODUCT",
-    "DELETE_PRODUCT"
-  ]
-}
-
 # {
-#   "name": "kphb Branch",
-#   "email": "kphb@gmail.com",
-#   "password": "kphb123",
-#   "role": "SUB_BRANCH",
-#   "contactNumber": "9876543219",
-#   "address": "kphb",
-#   "location": "Hyderabad",
-#   "branchId":"6a3912d97c3f96315204b938"
+#   "name": "Admin",
+#   "email": "admin@gmail.com",
+#   "password": "admin@123",
+#   "role": "ADMIN",
+#   "permissions": [
+#     "ADD_PRODUCT",
+#     "DELETE_PRODUCT"
+#   ]
 # }
+{
+  "name": "kphb Branch",
+  "email": "kphb@gmail.com",
+  "password": "kphb123",
+  "role": "SUB_BRANCH",
+  "contactNumber": "9876543219",
+  "address": "kphb",
+  "location": "Hyderabad",
+  "branchId":"6a3912d97c3f96315204b938"
+}
 
 ###
 GET http://localhost:3001/api/getSubBranchById/6a3a66084917d3584b12b4a4
@@ -559,6 +558,10 @@ Content-Type: application/json
 
 ###
 GET http://localhost:3001/api/getBranchOrders/6a3912d97c3f96315204b938
+Content-Type: application/json
+
+###
+GET http://localhost:3001/api/get-all-maker-production-items
 Content-Type: application/json
 
 ###

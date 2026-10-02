@@ -1,36 +1,40 @@
+
 require("dotenv").config();
+console.log("GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID);
+const express= require("express");
+const http= require("http");
 
-const express = require("express");
-const http = require("http");
-
-const connectDB = require("./db");
+const connectDB=require("./db");
 const cors = require("cors");
-const router = require("./router/router");
+const router= require("./router/router");
+
+
 
 const app = express();
 
-const server = http.createServer(app);
+const server= http.createServer(app);
 
 connectDB();
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+
 app.use(cors());
 
-app.get("/", (req, res) => {
-  res.send("API working");
+
+
+app.get('/',(req,res)=>{
+ res.send("API working");
 });
 
-app.use("/api", router);
+ app.use("/api",router );
 
-const PORT = process.env.PORT || 3001;
+ const PORT = process.env.PORT || 3001;
+  server.listen(PORT,()=>{
+     console.log(`server running at http://localhost:${PORT}`);
+  });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-process.on("uncaughtException", (err) => {
+  process.on("uncaughtException", (err) => {
   console.log("Uncaught Exception:", err);
 });
 

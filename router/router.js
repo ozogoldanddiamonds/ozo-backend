@@ -12,7 +12,7 @@ const { createCategory, getAllCategories, getCategoryById, updateCategory, delet
 const { getSubCategoryByCategory, createSubCategory, getAllSubCategories, getSubCategoryById, updateSubCategory, deleteSubCategory } = require("../controllers/subcategory.controller");
 const { getSubSubCategoryBySubCategory, createSubSubCategory, getAllSubSubCategories, getSubSubCategoryById, updateSubSubCategory, deleteSubSubCategory } = require("../controllers/subsubcategory.controller");
 const { createProduct, getAllProducts, getAllProductsWithPagination, getProductsByType, getProductById, updateProduct, deleteProduct, getProductsByCategory, getProductsByCategoryId, changeProductStatus } = require("../controllers/product.controller");
-const { getAllUsers, getUsersCount, getProfileSummary, userLogout, googleLogin, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword } = require("../controllers/userlogin.controller");
+const { getAllUsers, getUsersCount, getProfileSummary, userLogout, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword ,googleLogin} = require("../controllers/userlogin.controller");
 const { addToCart, getCart, updateCartItem, removeCartItem, clearCart } = require("../controllers/cart.controller");
 const { addToWishlist, getWishlist, removeWishlistItem } = require("../controllers/wishlist.controller");
 const { createAddress, getAddresses, getAddressById, updateAddress, deleteAddress, getAllAddresses, setDefaultAddress } = require("../controllers/address.controller");
@@ -31,6 +31,7 @@ const { assignProductToSubBranch, getAssignedProducts, returnAssignedProduct, as
 const { createScheme, getAllSchemes, getSchemeById, updateScheme, deleteScheme, updateSchemeStatus } = require("../controllers/scheme.controller");
 const { createUserScheme, getAllUserSchemes, getUserSchemeByUserId, updateUserScheme, deleteUserScheme, getUserSchemeById } = require("../controllers/userscheme.controller");
 const { createPayment, getAllPayments, getPaymentById, updatePayment, deletePayment, getUserPayments, getPaymentHistory } = require("../controllers/schema-payment.controller");
+const {createBrand,getAllBrands,getActiveBrands,getBrandById,updateBrand,deleteBrand} = require("../controllers/brand.controller");
 
 // const router = express.Router();
 
@@ -41,7 +42,7 @@ const { verifyToken } = require("../middleware/auth");
 const { uploadCertificate } = require("../controllers/upload.controller");
 const { createSupplier, getAllSuppliers, getActiveSuppliers, getSupplierById, updateSupplier, deleteSupplier, updateSupplierStatus } = require("../controllers/supplier.controller");
 const { createSupplierPurchase, getAllSupplierPurchases, getSupplierPurchaseById, getSupplierPurchases, updateSupplierPurchase, addPurchaseDocument, deletePurchaseDocument, updatePurchasePaymentStatus, updateSupplierPurchaseStatus, deleteSupplierPurchase } = require("../controllers/supplier-purchase.controller")
-const { createSupplierPurchaseItem, getAllSupplierPurchaseItems, getPurchaseItemsByPurchase, getPurchaseItemsByProduct, getPurchaseItemsByVariant, updateSupplierPurchaseItem, deleteSupplierPurchaseItem } = require("../controllers/supplier-purchase-items.controller");
+const { createSupplierPurchaseItem, getAllSupplierPurchaseItems, getPurchaseItemsByPurchase, getPurchaseItemsByProduct, getPurchaseItemsByVariant, updateSupplierPurchaseItem, deleteSupplierPurchaseItem,getSupplierPurchaseItemById } = require("../controllers/supplier-purchase-items.controller");
 const { createMaker, getAllMakers, getActiveMakers, getMakerById, updateMaker, deleteMaker, updateMakerStatus } = require("../controllers/maker.controller");
 const { createMakerProduction, getAllMakerProductions, getMakerProductionById, getMakerProductionsByMaker, updateMakerProduction, updateMakerProductionStatus, deleteMakerProduction } = require("../controllers/maker-production.controller");
 const { createMakerProductionItem, getAllMakerProductionItems, getProductionItems, getProductProductionItems, getVariantProductionItems, getMakerProductionItemById, updateMakerProductionItem, deleteMakerProductionItem } = require("../controllers/maker-production-item.controller");
@@ -65,6 +66,7 @@ router.put("/update-subbranch-status/:id", updateSubBranchStatus);
 router.get('/getSubBranchById/:id', getSubBranchById);
 router.delete('/delete-subbranch/:id', deleteSubBranch);
 router.get('/get-branch-list', getBranchList);
+router.post("/google-login",googleLogin);
 
 
 // gold Rate
@@ -125,7 +127,6 @@ router.get("/getAllUsers", getAllUsers);
 router.get("/getUsersCount", getUsersCount);
 router.get("/profileSummary/:userId", getProfileSummary);
 router.post("/logout", userLogout);
-router.post("/gmailLogin", googleLogin);
 
 
 
@@ -406,6 +407,10 @@ router.get("/get-product-purchase-items/:productId", getPurchaseItemsByProduct);
 router.get("/get-variant-purchase-items/:variantId", getPurchaseItemsByVariant);
 router.put("/update-supplier-purchase-item/:id", updateSupplierPurchaseItem);
 router.delete("/delete-supplier-purchase-item/:id", deleteSupplierPurchaseItem);
+router.get(
+    "/get-purchase-items/:id",
+    getSupplierPurchaseItemById
+);
 
 
 
@@ -437,6 +442,21 @@ router.get("/get-variant-production-items/:variantId", getVariantProductionItems
 router.get("/get-maker-production-item/:id", getMakerProductionItemById);
 router.put("/update-maker-production-item/:id", updateMakerProductionItem);
 router.delete("/delete-maker-production-item/:id", deleteMakerProductionItem);
+
+
+// =====================================================
+// CREATE BRAND
+// =====================================================
+
+router.post("/create-brand",upload.single("logo"),createBrand);
+router.get("/get-all-brands",getAllBrands);
+router.get("/get-active-brands",getActiveBrands);
+router.get("/get-brand/:id",getBrandById);
+router.put(
+    "/update-brand/:id",
+    upload.single("logo"),
+    updateBrand
+);router.delete("/delete-brand/:id",deleteBrand);
 
 
 module.exports = router;

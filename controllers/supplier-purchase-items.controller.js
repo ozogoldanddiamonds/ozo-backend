@@ -2,10 +2,11 @@ const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const SupplierPurchase = require("../models/supplier-purchase");
 const Product = require("../models/product");
 
+
+
 // =====================================================
 // CREATE SUPPLIER PURCHASE ITEM
 // =====================================================
-
 exports.createSupplierPurchaseItem = async (req, res) => {
     try {
 
@@ -231,6 +232,7 @@ exports.createSupplierPurchaseItem = async (req, res) => {
         });
     }
 };
+
 // =====================================================
 // GET ALL SUPPLIER PURCHASE ITEMS
 // =====================================================
@@ -289,6 +291,47 @@ exports.getAllSupplierPurchaseItems = async (
 
 };
 
+// getbyid
+exports.getSupplierPurchaseItemById = async (req, res) => {
+
+    try {
+
+        const { id } = req.params;
+
+        const item = await SupplierPurchaseItem
+            .findById(id)
+            .populate({
+                path: "purchase",
+                populate: {
+                    path: "supplier"
+                }
+            })
+            .populate("product");
+
+        if (!item) {
+            return res.status(404).json({
+                success: false,
+                message: "Supplier purchase item not found"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: item
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+
+    }
+};
+
 // =====================================================
 // GET ITEMS BY PURCHASE
 // =====================================================
@@ -300,18 +343,14 @@ exports.getPurchaseItemsByPurchase = async (
 
     try {
 
-        const { purchaseId } = req.params;
+        const { purchaseId } =
+            req.params;
 
-
-        // =====================================================
-        // VALIDATE PURCHASE
-        // =====================================================
 
         const purchase =
             await SupplierPurchase.findById(
                 purchaseId
-            ).populate("supplier");
-
+            );
 
         if (!purchase) {
 
@@ -327,126 +366,36 @@ exports.getPurchaseItemsByPurchase = async (
         }
 
 
-        // =====================================================
-        // GET ALL ITEMS FOR THIS PURCHASE
-        // =====================================================
-
         const items =
             await SupplierPurchaseItem
                 .find({
-                    purchase: purchaseId
+                    purchase:
+                        purchaseId
                 })
-                .populate({
-                    path: "product"
-                })
+                .populate(
+                    "product"
+                )
                 .sort({
                     createdAt: 1
                 });
 
 
-        // =====================================================
-        // ADD SELECTED VARIANT DETAILS
-        // =====================================================
-        //
-        // variantId Product schema lo embedded variant.
-        // Kabatti variantId ni populate cheyyalem.
-        //
-        // Product.variants[] nundi exact variant ni find chestham.
-        //
-        // =====================================================
-
-        const formattedItems =
-            items.map(item => {
-
-                const itemObject =
-                    item.toObject();
-
-
-                const selectedVariant =
-                    itemObject.product?.variants?.find(
-
-                        variant =>
-                            String(variant._id) ===
-                            String(itemObject.variantId)
-
-                    );
-
-
-                return {
-
-                    ...itemObject,
-
-                    variant:
-                        selectedVariant || null
-
-                };
-
-            });
-
-
-        // =====================================================
-        // SUCCESS RESPONSE
-        // =====================================================
-
         return res.status(200).json({
 
             success: true,
 
-            purchase: {
-
-                _id:
-                    purchase._id,
-
-                supplier:
-                    purchase.supplier,
-
-                invoiceNumber:
-                    purchase.invoiceNumber,
-
-                invoiceDate:
-                    purchase.invoiceDate,
-
-                purchaseDate:
-                    purchase.purchaseDate,
-
-                subtotal:
-                    purchase.subtotal,
-
-                discount:
-                    purchase.discount,
-
-                tax:
-                    purchase.tax,
-
-                totalAmount:
-                    purchase.totalAmount,
-
-                paymentStatus:
-                    purchase.paymentStatus,
-
-                status:
-                    purchase.status
-
-            },
-
             count:
-                formattedItems.length,
+                items.length,
 
             data:
-                formattedItems
+                items
 
         });
 
     }
-
-
     catch (error) {
 
-        console.log(
-            "Get Purchase Items By Purchase Error:",
-            error
-        );
-
+        console.log(error);
 
         return res.status(500).json({
 
@@ -609,18 +558,27 @@ exports.getPurchaseItemsByVariant = async (
 
 };
 
-
 // =====================================================
 // UPDATE SUPPLIER PURCHASE ITEM
 // =====================================================
 
-exports.updateSupplierPurchaseItem = async (req, res) => {
+exports.updateSupplierPurchaseItem = async (
+    req,
+    res
+) => {
 
     try {
 
-        const { id } = req.params;
+        const { id } =
+            req.params;
+
+
+        // ==========================================
+        // REQUEST BODY
+        // ==========================================
 
         const {
+            purchase,              // ✅ ADDED
             product,
             variantId,
             quantity,
@@ -634,9 +592,9 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         } = req.body;
 
 
-        // =====================================================
+        // ==========================================
         // FIND ITEM
-        // =====================================================
+        // ==========================================
 
         const item =
             await SupplierPurchaseItem.findById(id);
@@ -656,165 +614,165 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
-        // CHECK PURCHASE
-        // =====================================================
+        // ==========================================
+        // SUPPLIER PURCHASE UPDATE
+        // ==========================================
 
-        const purchaseExists =
-            await SupplierPurchase.findById(
-                item.purchase
-            );
+        if (purchase !== undefined) {
 
-
-        if (!purchaseExists) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Supplier purchase not found"
-
-            });
-
-        }
+            const purchaseExists =
+                await SupplierPurchase.findById(
+                    purchase
+                );
 
 
-        // =====================================================
-        // DETERMINE PRODUCT + VARIANT
-        // =====================================================
+            if (!purchaseExists) {
 
-        const selectedProductId =
-            product !== undefined
-                ? product
-                : item.product;
+                return res.status(404).json({
 
-        const selectedVariantId =
-            variantId !== undefined
-                ? variantId
-                : item.variantId;
+                    success: false,
 
+                    message:
+                        "Supplier purchase not found"
 
-        // =====================================================
-        // PRODUCT UPDATE / VALIDATION
-        // =====================================================
+                });
 
-        const existingProduct =
-            await Product.findById(
-                selectedProductId
-            );
+            }
 
 
-        if (!existingProduct) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Product not found"
-
-            });
+            // ✅ Update Supplier Purchase
+            item.purchase =
+                purchase;
 
         }
 
 
-        // =====================================================
-        // VARIANT VALIDATION
-        // =====================================================
-
-        const selectedVariant =
-            existingProduct.variants?.find(
-
-                variant =>
-                    String(variant._id) ===
-                    String(selectedVariantId)
-
-            );
-
-
-        if (!selectedVariant) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Variant not found in selected product"
-
-            });
-
-        }
-
-
-        // =====================================================
-        // DUPLICATE PRODUCT + VARIANT CHECK
-        // =====================================================
-        //
-        // Same product + same variant should not exist
-        // twice inside the SAME purchase/invoice.
-        //
-        // We exclude the current item using _id.
-        //
-        // =====================================================
-
-        const duplicateItem =
-            await SupplierPurchaseItem.findOne({
-
-                purchase: item.purchase,
-
-                product: selectedProductId,
-
-                variantId: selectedVariantId,
-
-                _id: {
-                    $ne: item._id
-                }
-
-            });
-
-
-        if (duplicateItem) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "This product variant is already added to this purchase"
-
-            });
-
-        }
-
-
-        // =====================================================
-        // UPDATE PRODUCT
-        // =====================================================
+        // ==========================================
+        // PRODUCT UPDATE
+        // ==========================================
 
         if (product !== undefined) {
 
+            const productExists =
+                await Product.findById(
+                    product
+                );
+
+
+            if (!productExists) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Product not found"
+
+                });
+
+            }
+
+
+            // If variant is also being updated,
+            // validate it against new product
+
+            const selectedVariantId =
+                variantId !== undefined
+                    ? variantId
+                    : item.variantId;
+
+
+            const variantExists =
+                productExists.variants?.some(
+                    variant =>
+                        String(variant._id) ===
+                        String(selectedVariantId)
+                );
+
+
+            if (!variantExists) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Variant not found in selected product"
+
+                });
+
+            }
+
+
             item.product =
-                selectedProductId;
+                product;
 
         }
 
 
-        // =====================================================
-        // UPDATE VARIANT
-        // =====================================================
+        // ==========================================
+        // VARIANT UPDATE
+        // ==========================================
 
         if (variantId !== undefined) {
 
+            const productId =
+                product !== undefined
+                    ? product
+                    : item.product;
+
+
+            const productExists =
+                await Product.findById(
+                    productId
+                );
+
+
+            if (!productExists) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Product not found"
+
+                });
+
+            }
+
+
+            const variantExists =
+                productExists.variants?.some(
+                    variant =>
+                        String(variant._id) ===
+                        String(variantId)
+                );
+
+
+            if (!variantExists) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Variant not found in selected product"
+
+                });
+
+            }
+
+
             item.variantId =
-                selectedVariantId;
+                variantId;
 
         }
 
 
-        // =====================================================
+        // ==========================================
         // QUANTITY UPDATE
-        // =====================================================
+        // ==========================================
 
         if (quantity !== undefined) {
 
@@ -839,17 +797,17 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
             }
 
 
-            // Current purchase quantity
+            // --------------------------------------
+            // Calculate already sold quantity
+            // --------------------------------------
+
             const currentQuantity =
                 Number(item.quantity) || 0;
 
-
-            // Current available quantity
             const currentAvailable =
                 Number(item.availableQuantity) || 0;
 
 
-            // Already sold/consumed quantity
             const soldQuantity =
                 Math.max(
                     currentQuantity -
@@ -858,8 +816,11 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
                 );
 
 
-            // Cannot reduce quantity below
+            // --------------------------------------
+            // New quantity cannot be less than
             // already sold quantity
+            // --------------------------------------
+
             if (
                 newQuantity <
                 soldQuantity
@@ -877,11 +838,18 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
             }
 
 
+            // --------------------------------------
+            // Update quantity
+            // --------------------------------------
+
             item.quantity =
                 newQuantity;
 
 
-            // Preserve already sold quantity
+            // --------------------------------------
+            // Recalculate available quantity
+            // --------------------------------------
+
             item.availableQuantity =
                 newQuantity -
                 soldQuantity;
@@ -889,9 +857,9 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
-        // PURCHASE PRICE UPDATE
-        // =====================================================
+        // ==========================================
+        // PURCHASE PRICE
+        // ==========================================
 
         if (purchasePrice !== undefined) {
 
@@ -900,7 +868,9 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
 
 
             if (
-                !Number.isFinite(newPurchasePrice) ||
+                !Number.isFinite(
+                    newPurchasePrice
+                ) ||
                 newPurchasePrice < 0
             ) {
 
@@ -922,39 +892,41 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
+        // ==========================================
         // SUPPLIER PRODUCT CODE
-        // =====================================================
+        // ==========================================
 
         if (
             supplierProductCode !== undefined
         ) {
 
             item.supplierProductCode =
-                supplierProductCode?.trim() || "";
+                supplierProductCode;
 
         }
 
 
-        // =====================================================
+        // ==========================================
         // BATCH NUMBER
-        // =====================================================
+        // ==========================================
 
         if (
             batchNumber !== undefined
         ) {
 
             item.batchNumber =
-                batchNumber?.trim() || "";
+                batchNumber;
 
         }
 
 
-        // =====================================================
-        // DISCOUNT UPDATE
-        // =====================================================
+        // ==========================================
+        // DISCOUNT
+        // ==========================================
 
-        if (discount !== undefined) {
+        if (
+            discount !== undefined
+        ) {
 
             const newDiscount =
                 Number(discount);
@@ -983,11 +955,13 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
-        // TAX UPDATE
-        // =====================================================
+        // ==========================================
+        // TAX
+        // ==========================================
 
-        if (tax !== undefined) {
+        if (
+            tax !== undefined
+        ) {
 
             const newTax =
                 Number(tax);
@@ -1016,18 +990,22 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
-        // TOTAL AMOUNT UPDATE
-        // =====================================================
+        // ==========================================
+        // TOTAL AMOUNT
+        // ==========================================
 
-        if (totalAmount !== undefined) {
+        if (
+            totalAmount !== undefined
+        ) {
 
             const newTotalAmount =
                 Number(totalAmount);
 
 
             if (
-                !Number.isFinite(newTotalAmount) ||
+                !Number.isFinite(
+                    newTotalAmount
+                ) ||
                 newTotalAmount < 0
             ) {
 
@@ -1049,11 +1027,13 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
+        // ==========================================
         // NOTES
-        // =====================================================
+        // ==========================================
 
-        if (notes !== undefined) {
+        if (
+            notes !== undefined
+        ) {
 
             item.notes =
                 notes?.trim() || "";
@@ -1061,16 +1041,28 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
         }
 
 
-        // =====================================================
+        // ==========================================
         // SAVE
-        // =====================================================
+        // ==========================================
+
+        console.log(
+            "ITEM BEFORE SAVE:",
+            item.toObject()
+        );
+
 
         await item.save();
 
 
-        // =====================================================
+        console.log(
+            "ITEM AFTER SAVE:",
+            item.toObject()
+        );
+
+
+        // ==========================================
         // POPULATE
-        // =====================================================
+        // ==========================================
 
         await item.populate([
 
@@ -1085,14 +1077,15 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
 
             {
                 path: "product"
+
             }
 
         ]);
 
 
-        // =====================================================
+        // ==========================================
         // SUCCESS
-        // =====================================================
+        // ==========================================
 
         return res.status(200).json({
 
@@ -1129,6 +1122,7 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
     }
 
 };
+
 // =====================================================
 // DELETE SUPPLIER PURCHASE ITEM
 // =====================================================

@@ -301,21 +301,34 @@ exports.createPayment = async (req, res) => {
 // Get All Payments
 // ===============================
 exports.getAllPayments = async (req, res) => {
+
     try {
 
-        const payments = await Payment.find();
+        const payments = await Payment.find()
+            .populate("user");
 
-        res.status(200).json({
+        return res.status(200).json({
+
             success: true,
+
             data: payments
+
         });
 
     } catch (error) {
-        res.status(500).json({
+
+        console.error(error);
+
+        return res.status(500).json({
+
             success: false,
+
             message: error.message
+
         });
+
     }
+
 };
 
 

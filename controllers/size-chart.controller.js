@@ -67,16 +67,34 @@ exports.createSizeChart = async (req, res) => {
 
     } catch (error) {
 
-        res.status(500).json({
+    console.log("Create Size Chart Error:", error);
+
+    // Duplicate subCategory error
+    if (error.code === 11000) {
+
+        return res.status(409).json({
 
             success: false,
 
             message:
-                error.message
+                "A size chart already exists for the selected sub category."
 
         });
 
     }
+
+    // Other backend errors
+    return res.status(500).json({
+
+        success: false,
+
+        message:
+            error.message ||
+            "Something went wrong while creating size chart."
+
+    });
+
+}
 
 };
 exports.getAllSizeCharts = async (req, res) => {

@@ -4,9 +4,16 @@ const jwt = require("jsonwebtoken");
 const Cart = require("../models/cart");
 const Wishlist = require("../models/wishlist");
 const Order = require("../models/order");
-const { transporter } = require("../middleware/mail");
+const {
+  transporter
+} = require(
+  "../middleware/mail"
+);
 const { OAuth2Client } = require("google-auth-library");
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID
+);
 /*
 REGISTER
 */
@@ -654,7 +661,6 @@ exports.userLogout = async (req, res) => {
     });
   }
 };
-
 
 // google with email
 exports.googleLogin = async (req, res) => {

@@ -402,7 +402,9 @@ exports.getMakerById = async (req, res) => {
 
     try {
 
-        const { id } = req.params;
+        const {
+            id
+        } = req.params;
 
 
         // =============================================
@@ -447,10 +449,6 @@ exports.getMakerById = async (req, res) => {
         }
 
 
-        // =============================================
-        // SUCCESS
-        // =============================================
-
         return res.status(200).json({
 
             success: true,
@@ -461,7 +459,6 @@ exports.getMakerById = async (req, res) => {
         });
 
     }
-
 
     catch (error) {
 
@@ -483,6 +480,7 @@ exports.getMakerById = async (req, res) => {
     }
 
 };
+
 
 
 // =====================================================

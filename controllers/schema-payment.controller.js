@@ -300,15 +300,14 @@ exports.createPayment = async (req, res) => {
 // ===============================
 // Get All Payments
 // ===============================
+// ===============================
+// Get All Payments
+// ===============================
 exports.getAllPayments = async (req, res) => {
     try {
 
         const payments = await Payment.find()
-            .populate({
-                path: "user",
-                select: "-password -token -OTP -OTPExpires"
-            })
-            .sort({ createdAt: -1 });
+            .populate('user', 'name email phone');
 
         res.status(200).json({
             success: true,
@@ -316,10 +315,12 @@ exports.getAllPayments = async (req, res) => {
         });
 
     } catch (error) {
+
         res.status(500).json({
             success: false,
             message: error.message
         });
+
     }
 };
 

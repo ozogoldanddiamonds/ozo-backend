@@ -1,131 +1,177 @@
 const SupplierPurchase = require("../models/supplier-purchase");
 const Supplier = require("../models/supplier");
 const cloudinary = require("../cloudinaryconfig");
+const path = require("path");
 
 
 // =====================================================
 // CREATE SUPPLIER PURCHASE + UPLOAD DOCUMENTS
 // =====================================================
 
+
+// =====================================================
+// CREATE SUPPLIER PURCHASE + DOCUMENT UPLOAD
+// =====================================================
+
 exports.createSupplierPurchase = async (req, res) => {
 
     try {
 
-        const { supplier, invoiceNumber, invoiceDate, purchaseDate, subtotal, discount, tax, totalAmount, paymentStatus, notes, status } = req.body;
+        const {
+            supplier,
+            invoiceNumber,
+            invoiceDate,
+            purchaseDate,
+            subtotal,
+            discount,
+            tax,
+            totalAmount,
+            paymentStatus,
+            notes,
+            status
+        } = req.body;
 
-        // ==========================
+
+        // =========================================
         // VALIDATION
-        // ==========================
+        // =========================================
 
         if (!supplier) {
+
             return res.status(400).json({
                 success: false,
                 message: "Supplier is required"
             });
+
         }
 
+
         if (!invoiceNumber) {
+
             return res.status(400).json({
                 success: false,
                 message: "Invoice number is required"
             });
+
         }
 
+
         if (!invoiceDate) {
+
             return res.status(400).json({
                 success: false,
                 message: "Invoice date is required"
             });
+
         }
+
 
         if (
             totalAmount === undefined ||
             totalAmount === null ||
             totalAmount === ""
         ) {
+
             return res.status(400).json({
                 success: false,
                 message: "Total amount is required"
             });
+
         }
 
 
-        // ==========================
+        // =========================================
         // CHECK SUPPLIER
-        // ==========================
+        // =========================================
 
         const existingSupplier =
             await Supplier.findById(supplier);
 
+
         if (!existingSupplier) {
+
             return res.status(404).json({
                 success: false,
                 message: "Supplier not found"
             });
+
         }
 
 
-        // ==========================
+        // =========================================
         // DUPLICATE INVOICE
-        // ==========================
+        // =========================================
 
         const existingPurchase =
             await SupplierPurchase.findOne({
-                supplier,
-                invoiceNumber: invoiceNumber.trim()
+
+                supplier: supplier,
+
+                invoiceNumber:
+                    invoiceNumber.trim()
+
             });
 
+
         if (existingPurchase) {
+
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "This invoice number already exists for this supplier"
+
             });
+
         }
 
 
-        // =================================================
+        // =========================================
         // DOCUMENTS
-        // =================================================
+        // =========================================
 
         const documents = [];
 
 
-        if (req.files && req.files.length > 0) {
+        if (
+            req.files &&
+            req.files.length > 0
+        ) {
 
-            for (const file of req.files) {
 
-                const result =
-                    await new Promise(
-                        (resolve, reject) => {
+            for (
+                const file of req.files
+            ) {
 
-                            cloudinary
-                                .uploader
-                                .upload_stream(
-                                    {
-                                        folder:
-                                            "supplier-purchases",
-                                        resource_type:
-                                            "auto"
-                                    },
-                                    (
-                                        error,
-                                        result
-                                    ) => {
 
-                                        if (error) {
-                                            reject(error);
-                                        }
-                                        else {
-                                            resolve(result);
-                                        }
+               const result = await new Promise((resolve, reject) => {
 
-                                    }
-                                )
-                                .end(file.buffer);
+  const resourceType =
+    file.mimetype === 'application/pdf'
+      ? 'raw'
+      : 'image';
 
-                        }
-                    );
+  const uploadStream =
+    cloudinary.uploader.upload_stream(
+      {
+        folder: 'supplier-purchases',
+        resource_type: resourceType
+      },
+      (error, result) => {
+
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+
+      }
+    );
+
+  uploadStream.end(file.buffer);
+
+});
 
 
                 documents.push({
@@ -149,9 +195,9 @@ exports.createSupplierPurchase = async (req, res) => {
         }
 
 
-        // =================================================
+        // =========================================
         // CREATE PURCHASE
-        // =================================================
+        // =========================================
 
         const purchase =
             await SupplierPurchase.create({
@@ -164,7 +210,8 @@ exports.createSupplierPurchase = async (req, res) => {
                 invoiceDate,
 
                 purchaseDate:
-                    purchaseDate || Date.now(),
+                    purchaseDate ||
+                    Date.now(),
 
                 subtotal:
                     Number(subtotal) || 0,
@@ -179,7 +226,8 @@ exports.createSupplierPurchase = async (req, res) => {
                     Number(totalAmount),
 
                 paymentStatus:
-                    paymentStatus || "PENDING",
+                    paymentStatus ||
+                    "PENDING",
 
                 notes:
                     notes?.trim() || "",
@@ -187,19 +235,24 @@ exports.createSupplierPurchase = async (req, res) => {
                 documents,
 
                 status:
-                    status || "DRAFT"
+                    status ||
+                    "DRAFT"
 
             });
 
 
-        // ==========================
+        // =========================================
         // POPULATE SUPPLIER
-        // ==========================
+        // =========================================
 
         await purchase.populate(
             "supplier"
         );
 
+
+        // =========================================
+        // RESPONSE
+        // =========================================
 
         return res.status(201).json({
 
@@ -214,9 +267,15 @@ exports.createSupplierPurchase = async (req, res) => {
         });
 
     }
+
+
     catch (error) {
 
-        console.log(error);
+        console.error(
+            "Create Supplier Purchase Error:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -436,328 +495,419 @@ exports.getSupplierPurchases = async (req, res) => {
 // UPDATE SUPPLIER PURCHASE + UPLOAD NEW DOCUMENTS
 // =====================================================
 
+
 exports.updateSupplierPurchase = async (req, res) => {
+  try {
 
-    try {
+    const {
+      supplier,
+      invoiceNumber,
+      invoiceDate,
+      purchaseDate,
+      subtotal,
+      discount,
+      tax,
+      totalAmount,
+      paymentStatus,
+      notes,
+      status,
+      existingDocuments
+    } = req.body;
 
-        const {
-            supplier,
-            invoiceNumber,
-            invoiceDate,
-            purchaseDate,
-            subtotal,
-            discount,
-            tax,
-            totalAmount,
-            paymentStatus,
-            notes,
-            status
-        } = req.body;
+
+    // =====================================================
+    // 1. FIND PURCHASE
+    // =====================================================
+
+    const purchase = await SupplierPurchase.findById(req.params.id);
+
+    if (!purchase) {
+      return res.status(404).json({
+        success: false,
+        message: "Supplier purchase not found"
+      });
+    }
 
 
-        // ==========================
-        // PURCHASE ID
-        // ==========================
+    // =====================================================
+    // 2. VALIDATION
+    // =====================================================
 
-        const purchaseId = req.params.id;
+    if (!supplier) {
+      return res.status(400).json({
+        success: false,
+        message: "Supplier is required"
+      });
+    }
 
-        if (!purchaseId) {
+    if (!invoiceNumber || !invoiceNumber.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Invoice number is required"
+      });
+    }
 
-            return res.status(400).json({
-                success: false,
-                message: "Purchase ID is required"
-            });
+    if (!invoiceDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Invoice date is required"
+      });
+    }
 
+    if (
+      totalAmount === undefined ||
+      totalAmount === null ||
+      totalAmount === ""
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Total amount is required"
+      });
+    }
+
+
+    // =====================================================
+    // 3. CHECK SUPPLIER
+    // =====================================================
+
+    const existingSupplier = await Supplier.findById(supplier);
+
+    if (!existingSupplier) {
+      return res.status(404).json({
+        success: false,
+        message: "Supplier not found"
+      });
+    }
+
+
+    // =====================================================
+    // 4. DUPLICATE INVOICE CHECK
+    // =====================================================
+
+    const duplicatePurchase =
+      await SupplierPurchase.findOne({
+        supplier: supplier,
+        invoiceNumber: invoiceNumber.trim(),
+        _id: {
+          $ne: req.params.id
+        }
+      });
+
+    if (duplicatePurchase) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This invoice number already exists for this supplier"
+      });
+    }
+
+
+    // =====================================================
+    // 5. EXISTING DOCUMENTS
+    // =====================================================
+
+    let finalDocuments = [];
+
+    if (existingDocuments) {
+
+      try {
+
+        finalDocuments = JSON.parse(existingDocuments);
+
+        if (!Array.isArray(finalDocuments)) {
+          finalDocuments = [];
         }
 
+      } catch (error) {
 
-        // ==========================
-        // CHECK PURCHASE
-        // ==========================
+        return res.status(400).json({
+          success: false,
+          message: "Invalid existing documents format"
+        });
 
-        const existingPurchase =
-            await SupplierPurchase.findById(purchaseId);
+      }
+    }
 
-        if (!existingPurchase) {
 
-            return res.status(404).json({
-                success: false,
-                message: "Supplier purchase not found"
-            });
+    // =====================================================
+    // 6. UPLOAD NEW DOCUMENTS TO CLOUDINARY
+    // =====================================================
 
-        }
+    if (req.files && req.files.length > 0) {
 
+      console.log(
+        "Files received:",
+        req.files.length
+      );
 
-        // ==========================
-        // VALIDATION
-        // ==========================
+      for (const file of req.files) {
 
-        if (!supplier) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Supplier is required"
-            });
-
-        }
-
-
-        if (!invoiceNumber) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Invoice number is required"
-            });
-
-        }
-
-
-        if (!invoiceDate) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Invoice date is required"
-            });
-
-        }
-
-
-        if (
-            totalAmount === undefined ||
-            totalAmount === null ||
-            totalAmount === ""
-        ) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Total amount is required"
-            });
-
-        }
-
-
-        // ==========================
-        // CHECK SUPPLIER
-        // ==========================
-
-        const existingSupplier =
-            await Supplier.findById(supplier);
-
-        if (!existingSupplier) {
-
-            return res.status(404).json({
-                success: false,
-                message: "Supplier not found"
-            });
-
-        }
-
-
-        // ==========================
-        // DUPLICATE INVOICE
-        // ==========================
-
-        const duplicateInvoice =
-            await SupplierPurchase.findOne({
-
-                supplier,
-
-                invoiceNumber:
-                    invoiceNumber.trim(),
-
-                _id: {
-                    $ne: purchaseId
-                }
-
-            });
-
-
-        if (duplicateInvoice) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "This invoice number already exists for this supplier"
-
-            });
-
-        }
-
-
-        // =================================================
-        // DOCUMENTS
-        // =================================================
-
-        // Existing documents ni retain chestham
-        const documents =
-            existingPurchase.documents
-                ? [...existingPurchase.documents]
-                : [];
-
-
-        // =================================================
-        // UPLOAD NEW DOCUMENTS
-        // =================================================
-
-        if (
-            req.files &&
-            req.files.length > 0
-        ) {
-
-            for (const file of req.files) {
-
-                const result =
-                    await new Promise(
-                        (resolve, reject) => {
-
-                            cloudinary
-                                .uploader
-                                .upload_stream(
-                                    {
-                                        folder:
-                                            "supplier-purchases",
-
-                                        resource_type:
-                                            "auto"
-                                    },
-
-                                    (
-                                        error,
-                                        result
-                                    ) => {
-
-                                        if (error) {
-                                            reject(error);
-                                        }
-                                        else {
-                                            resolve(result);
-                                        }
-
-                                    }
-                                )
-                                .end(file.buffer);
-
-                        }
-                    );
-
-
-                documents.push({
-
-                    url:
-                        result.secure_url,
-
-                    type:
-                        "OTHER",
-
-                    description:
-                        file.originalname,
-
-                    uploadedAt:
-                        new Date()
-
-                });
-
-            }
-
-        }
-
-
-        // =================================================
-        // UPDATE PURCHASE
-        // =================================================
-
-        existingPurchase.supplier =
-            supplier;
-
-        existingPurchase.invoiceNumber =
-            invoiceNumber.trim();
-
-        existingPurchase.invoiceDate =
-            invoiceDate;
-
-        existingPurchase.purchaseDate =
-            purchaseDate ||
-            existingPurchase.purchaseDate ||
-            Date.now();
-
-        existingPurchase.subtotal =
-            Number(subtotal) || 0;
-
-        existingPurchase.discount =
-            Number(discount) || 0;
-
-        existingPurchase.tax =
-            Number(tax) || 0;
-
-        existingPurchase.totalAmount =
-            Number(totalAmount);
-
-        existingPurchase.paymentStatus =
-            paymentStatus ||
-            existingPurchase.paymentStatus ||
-            "PENDING";
-
-        existingPurchase.notes =
-            notes?.trim() || "";
-
-        existingPurchase.documents =
-            documents;
-
-        existingPurchase.status =
-            status ||
-            existingPurchase.status ||
-            "DRAFT";
-
-
-        await existingPurchase.save();
-
-
-        // ==========================
-        // POPULATE SUPPLIER
-        // ==========================
-
-        await existingPurchase.populate(
-            "supplier"
+        console.log(
+          "Uploading:",
+          file.originalname,
+          file.mimetype
         );
 
 
-        // ==========================
-        // RESPONSE
-        // ==========================
+        // -------------------------------------------------
+        // RESOURCE TYPE
+        // -------------------------------------------------
+        // PDF and images -> image resource
+        // -------------------------------------------------
 
-        return res.status(200).json({
+        const resourceType = "image";
 
-            success: true,
 
-            message:
-                "Supplier purchase updated successfully",
+        // -------------------------------------------------
+        // GET FILE EXTENSION
+        // -------------------------------------------------
 
-            data:
-                existingPurchase
+        const extension =
+          path.extname(file.originalname);
+
+
+        // -------------------------------------------------
+        // GET FILE NAME WITHOUT EXTENSION
+        // -------------------------------------------------
+
+        let fileName =
+          path.basename(
+            file.originalname,
+            extension
+          );
+
+
+        // -------------------------------------------------
+        // REMOVE SPECIAL CHARACTERS
+        // -------------------------------------------------
+
+        fileName = fileName
+          .replace(/[^a-zA-Z0-9-_]/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "");
+
+
+        // -------------------------------------------------
+        // DEFAULT FILE NAME
+        // -------------------------------------------------
+
+        if (!fileName) {
+          fileName = "document";
+        }
+
+
+        // -------------------------------------------------
+        // UNIQUE PUBLIC ID
+        // -------------------------------------------------
+
+        const publicId =
+          `${fileName}-${Date.now()}`;
+
+
+        console.log(
+          "Cloudinary public_id:",
+          publicId
+        );
+
+        console.log(
+          "Cloudinary resource_type:",
+          resourceType
+        );
+
+
+        // =================================================
+        // CLOUDINARY UPLOAD
+        // =================================================
+
+        const result =
+          await new Promise((resolve, reject) => {
+
+            const uploadOptions = {
+
+              folder: "supplier-purchases",
+
+              public_id: publicId,
+
+              resource_type: resourceType
+
+            };
+
+
+            const uploadStream =
+              cloudinary.uploader.upload_stream(
+
+                uploadOptions,
+
+                (error, result) => {
+
+                  if (error) {
+
+                    console.error(
+                      "Cloudinary Upload Error:",
+                      error
+                    );
+
+                    reject(error);
+
+                  } else {
+
+                    resolve(result);
+
+                  }
+
+                }
+
+              );
+
+
+            uploadStream.end(file.buffer);
+
+          });
+
+
+        // =================================================
+        // CLOUDINARY SUCCESS
+        // =================================================
+
+        console.log(
+          "Cloudinary upload successful"
+        );
+
+        console.log(
+          "Cloudinary URL:",
+          result.secure_url
+        );
+
+
+        // =================================================
+        // ADD DOCUMENT
+        // =================================================
+
+        finalDocuments.push({
+
+          url: result.secure_url,
+
+          type: "OTHER",
+
+          description: file.originalname,
+
+          uploadedAt: new Date()
 
         });
 
-
-    }
-    catch (error) {
-
-        console.log(error);
-
-        return res.status(500).json({
-
-            success: false,
-
-            message:
-                error.message
-
-        });
-
+      }
     }
 
+
+    // =====================================================
+    // 7. MAXIMUM DOCUMENT CHECK
+    // =====================================================
+
+    if (finalDocuments.length > 10) {
+
+      return res.status(400).json({
+        success: false,
+        message: "Maximum 10 documents are allowed"
+      });
+
+    }
+
+
+    // =====================================================
+    // 8. UPDATE PURCHASE FIELDS
+    // =====================================================
+
+    purchase.supplier =
+      supplier;
+
+    purchase.invoiceNumber =
+      invoiceNumber.trim();
+
+    purchase.invoiceDate =
+      invoiceDate;
+
+    purchase.purchaseDate =
+      purchaseDate ||
+      purchase.purchaseDate ||
+      Date.now();
+
+    purchase.subtotal =
+      Number(subtotal) || 0;
+
+    purchase.discount =
+      Number(discount) || 0;
+
+    purchase.tax =
+      Number(tax) || 0;
+
+    purchase.totalAmount =
+      Number(totalAmount);
+
+    purchase.paymentStatus =
+      paymentStatus || "PENDING";
+
+    purchase.notes =
+      notes?.trim() || "";
+
+    purchase.status =
+      status || "DRAFT";
+
+
+    // =====================================================
+    // 9. UPDATE DOCUMENTS
+    // =====================================================
+
+    purchase.documents =
+      finalDocuments;
+
+
+    // =====================================================
+    // 10. SAVE
+    // =====================================================
+
+    await purchase.save();
+
+
+    // =====================================================
+    // 11. POPULATE SUPPLIER
+    // =====================================================
+
+    await purchase.populate("supplier");
+
+
+    // =====================================================
+    // 12. SUCCESS RESPONSE
+    // =====================================================
+
+    return res.status(200).json({
+
+      success: true,
+
+      message:
+        "Supplier purchase updated successfully",
+
+      data: purchase
+
+    });
+
+
+  } catch (error) {
+
+    console.error(
+      "Update Supplier Purchase Error:",
+      error
+    );
+
+    return res.status(500).json({
+
+      success: false,
+
+      message: error.message
+
+    });
+
+  }
 };
-
 // =====================================================
 // ADD DOCUMENT TO SUPPLIER PURCHASE
 // =====================================================
