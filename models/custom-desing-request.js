@@ -62,7 +62,7 @@ const customDesignRequestSchema = new mongoose.Schema(
     },
 
     // =========================
-    // CUSTOMER REQUIREMENT
+    // REQUIREMENTS
     // =========================
 
     metalType: {
@@ -73,7 +73,8 @@ const customDesignRequestSchema = new mongoose.Schema(
 
     metalPurity: {
       type: String,
-      default: null
+      default: null,
+      trim: true
     },
 
     metalColor: {
@@ -100,7 +101,7 @@ const customDesignRequestSchema = new mongoose.Schema(
     },
 
     // =========================
-    // REQUEST STATUS
+    // STATUS
     // =========================
 
     status: {
