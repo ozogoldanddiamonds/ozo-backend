@@ -1842,6 +1842,10 @@ exports.getProductById = async (
           "subSubCategory",
           "name image"
         )
+        .populate(
+          "brand",
+          "name"
+        )
 
         .lean();
 
