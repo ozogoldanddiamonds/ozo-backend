@@ -1,5 +1,4 @@
 const Product = require("../models/product");
-
 const cloudinary =
   require("../cloudinaryconfig");
 const calculateVariantPrice =
@@ -1258,7 +1257,7 @@ exports.getAllProducts =
           .populate("category")
           .populate("subCategory")
           .populate("subSubCategory")
-
+          .populate("brand", "name")
           .sort({
             createdAt: -1
           })

@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 const variantSchema = new mongoose.Schema({
-  size: {type: String},
+  size: { type: String },
   sku: {
     type: String,
     required: [true, "SKU is required"],
@@ -126,7 +126,7 @@ const productSchema = new mongoose.Schema({
 
   name: {
     type: String,
-     required: [true, "Product name is required"],
+    required: [true, "Product name is required"],
     trim: true
   },
 
@@ -142,19 +142,19 @@ const productSchema = new mongoose.Schema({
   category: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Category",
-     required: [true, "  Category name is required"]
+    required: [true, "  Category name is required"]
   },
 
   subCategory: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "SubCategory",
-     required: [true, "subCategory name is required"]
+    required: [true, "subCategory name is required"]
   },
 
   subSubCategory: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "SubSubCategory",
-     required: [true, "subsub Category name is required"]
+    required: [true, "subsub Category name is required"]
   },
 
 
@@ -190,18 +190,19 @@ const productSchema = new mongoose.Schema({
   },
 
   brand: {
-    type: String
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Brand"
   },
 
   hallmarkCertified: {
     type: Boolean,
     default: true,
-    
+
   },
 
   hallmarkNumber: {
     type: String,
-      unique: true,
+    unique: true,
   },
 
   certificationIncluded: {
@@ -238,7 +239,7 @@ const productSchema = new mongoose.Schema({
 
   images: [{
     type: String,
-        required: [true, "image name is required"]
+    required: [true, "image name is required"]
 
   }],
 
