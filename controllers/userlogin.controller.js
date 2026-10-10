@@ -12,7 +12,7 @@ const {
 const { OAuth2Client } = require("google-auth-library");
 
 const googleClient = new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID
+  process.env.GOOGLE_CLIENT_ID
 );
 /*
 REGISTER
@@ -130,17 +130,15 @@ exports.userLogin =
         });
       }
 
-      const token =
-        jwt.sign(
-          {
-            userId:
-              user._id
-          },
-          "secretKey",
-          {
-            expiresIn: "7d"
-          }
-        );
+      const token = jwt.sign(
+        {
+          userId: user._id
+        },
+        process.env.JWT_SECRET,
+        {
+          expiresIn: "7d"
+        }
+      );
 
       user.token =
         token;

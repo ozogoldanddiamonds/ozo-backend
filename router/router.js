@@ -462,13 +462,10 @@ router.put(
 
 // ===============================
 // CUSTOMER CUSTOM DESIGN
-// ===============================
+// =============================== 
 
-// router.post("/create",
-//  verifyToken,
-//   createCustomDesignRequest
 
-// );
+// Create request with multiple images
 router.post(
   "/create",
   verifyToken,
@@ -476,17 +473,20 @@ router.post(
   createCustomDesignRequest
 );
 
+// Get all requests belonging to logged-in customer
 router.get(
   "/my-requests",
   verifyToken,
   getMyCustomDesignRequests
 );
 
+// Get one request belonging to logged-in customer
 router.get(
   "/costomdesigenbyid/:id",
   verifyToken,
   getMyCustomDesignRequestById
 );
+
 
 router.put(
   "/cancel/:id",
@@ -535,6 +535,7 @@ router.put(
   upload.array("referenceImages", 5),
   updateMyCustomDesignRequest
 );
+
 
 
 module.exports = router;

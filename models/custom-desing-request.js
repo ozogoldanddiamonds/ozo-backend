@@ -2,52 +2,50 @@ const mongoose = require("mongoose");
 
 const customDesignRequestSchema = new mongoose.Schema(
   {
+    // Unique Request Number
     requestNumber: {
       type: String,
-      required: true,
       unique: true,
       trim: true
     },
 
+    // Logged-in Customer
     customer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true
     },
 
-    // =========================
-    // CATEGORY
-    // =========================
-
-    category: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Category",
-      required: true
+    // Jewellery Type
+    jewelleryType: {
+      type: String,
+      required: true,
+      enum: [
+        "RING",
+        "NECKLACE",
+        "EARRINGS",
+        "BANGLES",
+        "BRACELET",
+        "CHAIN",
+        "PENDANT",
+        "OTHER"
+      ]
     },
 
-    subCategory: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "SubCategory",
-      required: true
+    // Design Type
+    designType: {
+      type: String,
+      required: true,
+      enum: ["REFERENCE_DESIGN", "NEW_DESIGN"]
     },
 
-    subSubCategory: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "SubSubCategory",
-      required: true
-    },
-
-    // =========================
-    // DESIGN
-    // =========================
-
+    // Multiple Reference Images
     referenceImages: [
       {
         url: {
           type: String,
           required: true
         },
-
         publicId: {
           type: String,
           default: null
@@ -55,75 +53,123 @@ const customDesignRequestSchema = new mongoose.Schema(
       }
     ],
 
+    // Design Description
     description: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
+      maxlength: 2000
     },
 
-    // =========================
-    // REQUIREMENTS
-    // =========================
-
+    // Metal Type
     metalType: {
       type: String,
-      enum: ["gold", "silver", "platinum"],
+      required: true,
+      enum: [
+        "GOLD",
+        "GOLD_DIAMOND",
+        "SILVER",
+        "PLATINUM"
+      ]
+    },
+
+    goldPurity: {
+      type: String,
+      enum: ["18K", "22K", "24K"],
       default: null
     },
 
-    metalPurity: {
+    goldColor: {
       type: String,
-      default: null,
-      trim: true
-    },
-
-    metalColor: {
-      type: String,
-      enum: ["yellow", "white", "rose"],
+      enum: ["YELLOW", "WHITE", "ROSE"],
       default: null
     },
 
-    stonePreference: {
-      type: String,
-      default: null,
-      trim: true
-    },
-
-    budget: {
+    // Approximate Weight in Grams
+    goldWeight: {
       type: Number,
-      min: 0,
+      required: true,
+      min: [0.1, "Weight must be greater than zero"]
+    },
+
+    // Stone Details
+    stoneType: {
+      type: String,
+      required: true,
+      enum: ["NONE", "DIAMOND", "GEMSTONE"]
+    },
+
+    diamondType: {
+      type: String,
+      enum: ["NATURAL", "LAB_GROWN"],
       default: null
     },
 
+    // Used when stoneType is GEMSTONE
+    gemstoneType: {
+      type: String,
+      trim: true,
+      default: null
+    },
+
+    // Delivery Date
     requiredDate: {
       type: Date,
       default: null
     },
 
-    // =========================
-    // STATUS
-    // =========================
+    // Quantity
+    quantity: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1
+    },
 
+    // Preferred Contact Method
+    preferredContactMethod: {
+      type: String,
+      enum: ["WHATSAPP", "PHONE", "EMAIL"],
+      default: "WHATSAPP"
+    },
+
+    // Additional Notes
+    additionalNotes: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: ""
+    },
+
+    // Admin Management
     status: {
       type: String,
       enum: [
-        "NEW",
-        "CONTACTED",
-        "DISCUSSION",
+        "PENDING",
+        "UNDER_REVIEW",
         "QUOTATION_SENT",
-        "ACCEPTED",
-        "ORDER_CREATED",
+        "APPROVED",
         "IN_PRODUCTION",
         "COMPLETED",
         "REJECTED",
         "CANCELLED"
       ],
-      default: "NEW"
+      default: "PENDING"
     },
 
     adminNotes: {
       type: String,
-      trim: true,
+      default: ""
+    },
+
+    quotedPrice: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+
+    estimatedDeliveryDate: {
+      type: Date,
       default: null
     }
   },
@@ -131,6 +177,50 @@ const customDesignRequestSchema = new mongoose.Schema(
     timestamps: true
   }
 );
+
+// Conditional validations
+customDesignRequestSchema.pre("validate", function () {
+  if (
+    ["GOLD", "GOLD_DIAMOND"].includes(this.metalType) &&
+    !this.goldPurity
+  ) {
+    this.invalidate(
+      "goldPurity",
+      "Gold purity is required"
+    );
+  }
+
+  if (
+    this.stoneType === "DIAMOND" &&
+    !this.diamondType
+  ) {
+    this.invalidate(
+      "diamondType",
+      "Please select diamond type"
+    );
+  }
+
+  if (
+    this.stoneType === "GEMSTONE" &&
+    !this.gemstoneType
+  ) {
+    this.invalidate(
+      "gemstoneType",
+      "Please specify gemstone type"
+    );
+  }
+
+  if (
+    this.designType === "REFERENCE_DESIGN" &&
+    (!this.referenceImages ||
+      this.referenceImages.length === 0)
+  ) {
+    this.invalidate(
+      "referenceImages",
+      "Please upload at least one reference image"
+    );
+  }
+});
 
 module.exports = mongoose.model(
   "CustomDesignRequest",

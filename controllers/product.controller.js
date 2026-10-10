@@ -775,10 +775,45 @@ exports.updateProduct = async (req, res) => {
     // PARSE VARIANTS
     // =========================
 
-    const variants =
-      req.body.variants
-        ? JSON.parse(req.body.variants)
-        : existingProduct.variants;
+    // =========================
+    // PARSE VARIANTS & AUTO SKU
+    // =========================
+
+    let variants = req.body.variants
+      ? JSON.parse(req.body.variants)
+      : existingProduct.variants;
+
+    // Existing variant IDs and SKUs
+    const existingVariants = existingProduct.variants || [];
+
+    for (const variant of variants) {
+
+      // Check whether this variant already exists
+      const existingVariant = variant._id
+        ? existingVariants.find(
+          v => String(v._id) === String(variant._id)
+        )
+        : null;
+
+      if (existingVariant) {
+
+        // Preserve existing SKU during update
+        variant.sku = existingVariant.sku;
+
+      } else {
+
+        // Generate SKU only for a new variant
+        if (!variant.sku || !variant.sku.trim()) {
+
+          variant.sku = `SKU-${Date.now()}-${Math.floor(
+            1000 + Math.random() * 9000
+          )}`;
+
+        }
+
+      }
+
+    }
 
     // =========================
     // PARSE TAGS

@@ -1,356 +1,126 @@
-const mongoose = require("mongoose");
+
+
 const CustomDesignRequest = require("../models/custom-desing-request");
-const Category = require("../models/category");
-const SubCategory = require("../models/sub-category");
-const SubSubCategory = require("../models/sub-sub-category");
 const cloudinary = require("../cloudinaryconfig");
+const { Readable } = require("stream");
 
-
-
-const generateRequestNumber = async () => {
-  const lastRequest = await CustomDesignRequest
-    .findOne({})
-    .sort({ createdAt: -1 })
-    .select("requestNumber");
-
-  let nextNumber = 1;
-
-  if (lastRequest?.requestNumber) {
-    const match = lastRequest.requestNumber.match(/(\d+)$/);
-
-    if (match) {
-      nextNumber = parseInt(match[1], 10) + 1;
-    }
-  }
-
-  return `CR-${String(nextNumber).padStart(5, "0")}`;
-};
-
-
-
-
-
-
-
-
+// CREATE CUSTOM DESIGN REQUEST
 exports.createCustomDesignRequest = async (req, res) => {
   try {
-
-    // =========================
-    // CUSTOMER AUTHENTICATION
-    // =========================
-
+    // 1. Get logged-in customer ID from JWT
     const customerId =
-      req.user?.userId ||
       req.user?.id ||
-      req.user?._id;
+      req.user?._id ||
+      req.user?.userId;
 
     if (!customerId) {
       return res.status(401).json({
         success: false,
-        message: "Customer authentication required"
+        message: "User ID not found. Please login again."
       });
     }
 
+    // 2. Upload reference images to Cloudinary
+    const uploadedImages = [];
+    const files = req.files || [];
 
-    // =========================
-    // REQUEST BODY
-    // =========================
-
-    const {
-      category,
-      subCategory,
-      subSubCategory,
-      description,
-      metalType,
-      metalPurity,
-      metalColor,
-      stonePreference,
-      budget,
-      requiredDate
-    } = req.body;
-
-
-    // =========================
-    // REQUIRED VALIDATION
-    // =========================
-
-    if (!category) {
+    if (files.length > 5) {
       return res.status(400).json({
         success: false,
-        message: "Category is required"
+        message: "Maximum 5 reference images are allowed."
       });
     }
 
-    if (!subCategory) {
-      return res.status(400).json({
-        success: false,
-        message: "Sub category is required"
+    for (const file of files) {
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            folder: "custom-design-requests",
+            resource_type: "image"
+          },
+          (error, result) => {
+            if (error) {
+              return reject(error);
+            }
+
+            if (!result) {
+              return reject(new Error("Cloudinary upload failed."));
+            }
+
+            resolve(result);
+          }
+        );
+
+        Readable.from(file.buffer).pipe(uploadStream);
+      });
+
+      uploadedImages.push({
+        url: result.secure_url,
+        publicId: result.public_id
       });
     }
 
-    if (!subSubCategory) {
-      return res.status(400).json({
-        success: false,
-        message: "Sub sub category is required"
-      });
-    }
-
-    if (!description || !description.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Design description is required"
-      });
-    }
-
-
-    // =========================
-    // OBJECT ID VALIDATION
-    // =========================
-
-    if (!mongoose.Types.ObjectId.isValid(category)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid category"
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(subCategory)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid sub category"
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(subSubCategory)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid sub sub category"
-      });
-    }
-
-
-    // =========================
-    // CATEGORY VALIDATION
-    // =========================
-
-    const categoryDoc = await Category.findOne({
-      _id: category,
-      isActive: true
-    });
-
-    if (!categoryDoc) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found"
-      });
-    }
-
-
-    const subCategoryDoc = await SubCategory.findOne({
-      _id: subCategory,
-      category: category,
-      isActive: true
-    });
-
-    if (!subCategoryDoc) {
-      return res.status(404).json({
-        success: false,
-        message: "Sub category does not belong to selected category"
-      });
-    }
-
-
-    const subSubCategoryDoc = await SubSubCategory.findOne({
-      _id: subSubCategory,
-      category: category,
-      subCategory: subCategory,
-      isActive: true
-    });
-
-    if (!subSubCategoryDoc) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Sub sub category does not belong to selected category/sub category"
-      });
-    }
-
-
-    // =========================
-    // CLOUDINARY IMAGE UPLOAD
-    // =========================
-
-    const referenceImages = [];
-
-    if (req.files && req.files.length > 0) {
-
-      for (const file of req.files) {
-
-        try {
-
-          const uploadResult = await new Promise((resolve, reject) => {
-
-            const uploadStream = cloudinary.uploader.upload_stream(
-              {
-                folder: "custom-design",
-                resource_type: "image"
-              },
-              (error, result) => {
-
-                if (error) {
-                  reject(error);
-                } else {
-                  resolve(result);
-                }
-
-              }
-            );
-
-            uploadStream.end(file.buffer);
-
-          });
-
-
-          referenceImages.push({
-            url: uploadResult.secure_url,
-            publicId: uploadResult.public_id
-          });
-
-
-        } catch (uploadError) {
-
-          console.error(
-            "Cloudinary Upload Error:",
-            uploadError
-          );
-
-          return res.status(500).json({
-            success: false,
-            message: "Failed to upload reference image",
-            error: uploadError.message
-          });
-
-        }
-
-      }
-    }
-
-
-    // =========================
-    // REQUEST NUMBER
-    // =========================
-
-    const requestNumber = await generateRequestNumber();
-
-
-    // =========================
-    // CREATE REQUEST
-    // =========================
-
-    const request = await CustomDesignRequest.create({
-
-      requestNumber,
+    // 3. Create custom design request
+    const customDesign = new CustomDesignRequest({
+      requestNumber: `CDR-${Date.now()}-${Math.floor(
+        1000 + Math.random() * 9000
+      )}`,
 
       customer: customerId,
 
-      category,
-      subCategory,
-      subSubCategory,
+      jewelleryType: req.body.jewelleryType,
+      designType: req.body.designType,
+      description: req.body.description,
 
-      referenceImages,
+      metalType: req.body.metalType,
+      goldPurity: req.body.goldPurity || undefined,
+      goldColor: req.body.goldColor || undefined,
 
-      description: description.trim(),
+      stoneType: req.body.stoneType,
+      diamondType: req.body.diamondType || undefined,
+      gemstoneType: req.body.gemstoneType || undefined,
 
-      metalType: metalType || null,
+      goldWeight: Number(req.body.goldWeight),
+      requiredDate: req.body.requiredDate || null,
+      quantity: Number(req.body.quantity),
 
-      metalPurity: metalPurity || null,
+      preferredContactMethod: req.body.preferredContactMethod,
+      additionalNotes: req.body.additionalNotes || "",
 
-      metalColor: metalColor || null,
-
-      stonePreference: stonePreference || null,
-
-      budget:
-        budget !== undefined &&
-          budget !== null &&
-          budget !== ""
-          ? Number(budget)
-          : null,
-
-      requiredDate:
-        requiredDate || null,
-
-      status: "NEW"
-
+      referenceImages: uploadedImages
     });
 
+    // 4. Save to MongoDB
+    await customDesign.save();
 
-    // =========================
-    // POPULATE RESPONSE
-    // =========================
-
-    const populatedRequest =
-      await CustomDesignRequest
-        .findById(request._id)
-        .populate("category", "name image")
-        .populate("subCategory", "name image")
-        .populate("subSubCategory", "name image");
-
-
-    // =========================
-    // SUCCESS RESPONSE
-    // =========================
-
+    // 5. Send response
     return res.status(201).json({
-
       success: true,
-
-      message:
-        "Custom design request submitted successfully. Our team will contact you shortly.",
-
-      data: populatedRequest
-
+      message: "Custom design request created successfully.",
+      data: customDesign
     });
-
 
   } catch (error) {
-
-    console.error(
-      "Create Custom Design Request Error:",
-      error
-    );
+    console.error("Create Custom Design Error:", error);
 
     return res.status(500).json({
-
       success: false,
-
-      message: "Failed to create custom design request",
-
-      error: error.message
-
+      message: error.message || "Failed to create custom design request."
     });
-
   }
 };
 
 
-exports.getMyCustomDesignRequests = async (req, res) => {
+
+// ===============================
+// GET LOGGED-IN USER REQUESTS
+// GET /api/custom-design-requests/my-requests
+// ===============================
+// GET ALL CUSTOM DESIGN REQUESTS - ADMIN
+exports.getAllCustomDesignRequests = async (req, res) => {
   try {
-    const customerId = req.user?.userId;
-
-    if (!customerId) {
-      return res.status(401).json({
-        success: false,
-        message: "Customer authentication required"
-      });
-    }
-
-    const requests = await CustomDesignRequest.find({
-      customer: customerId
-    })
-      .populate("category", "name image")
-      .populate("subCategory", "name image")
-      .populate("subSubCategory", "name image")
+    const requests = await CustomDesignRequest.find()
+      .populate("customer", "name phone email profileImage")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -360,11 +130,107 @@ exports.getMyCustomDesignRequests = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Get My Custom Design Requests Error:", error);
+    console.error("Get All Custom Design Requests Error:", error.message);
 
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch custom design requests",
+      message: "Failed to fetch custom design requests."
+    });
+  }
+};
+
+
+// ===============================
+// GET SINGLE USER REQUEST
+// GET /api/custom-design-requests/my-requests/:id
+// ===============================
+// GET ONE REQUEST FOR LOGGED-IN CUSTOMER
+exports.getMyCustomDesignRequestById = async (req, res) => {
+  try {
+    const customerId =
+      req.user?.userId ||
+      req.user?.id ||
+      req.user?._id;
+
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: "Please login again."
+      });
+    }
+
+    const request = await CustomDesignRequest.findOne({
+      _id: req.params.id,
+      customer: customerId
+    }).populate("customer", "name phone email profileImage");
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: "Custom design request not found."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: request
+    });
+
+  } catch (error) {
+    console.error("Get Custom Design Request Error:", error.message);
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request ID."
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch custom design request."
+    });
+  }
+};
+
+// =========================================================================================================================
+
+// GET LOGGED-IN CUSTOMER REQUESTS
+exports.getMyCustomDesignRequests = async (req, res) => {
+  try {
+    const customerId =
+      req.user?.userId ||
+      req.user?.id ||
+      req.user?._id;
+
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: "Customer authentication required."
+      });
+    }
+
+    const requests = await CustomDesignRequest.find({
+      customer: customerId
+    })
+      .populate("customer", "name phone email profileImage")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+
+  } catch (error) {
+    console.error(
+      "Get My Custom Design Requests Error:",
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch your custom design requests.",
       error: error.message
     });
   }
@@ -375,81 +241,51 @@ exports.getMyCustomDesignRequests = async (req, res) => {
 // GET MY CUSTOM DESIGN REQUEST BY ID
 // ==========================================
 
+// GET ONE REQUEST FOR LOGGED-IN CUSTOMER
 exports.getMyCustomDesignRequestById = async (req, res) => {
   try {
-
-    const { id } = req.params;
-
-    console.log("REQUEST ID:", id);
-    console.log("REQ.USER:", req.user);
-
-
-    // Get user id from token
-    const userId =
-      req.user?._id ||
+    const customerId =
+      req.user?.userId ||
       req.user?.id ||
-      req.user?.userId;
+      req.user?._id;
 
-
-    console.log("USER ID FROM TOKEN:", userId);
-
-
-    if (!userId) {
+    if (!customerId) {
       return res.status(401).json({
         success: false,
-        message: "User ID not found in token"
+        message: "Please login again."
       });
     }
 
-
-    // ==========================================
-    // FIND REQUEST
-    // ==========================================
-
-    const request =
-      await CustomDesignRequest
-        .findOne({
-          _id: id,
-          customer: userId
-        })
-        .populate("customer", "name email phone")
-        .populate("category", "name")
-        .populate("subCategory", "name")
-        .populate("subSubCategory", "name");
-
-
-    console.log(
-      "FOUND REQUEST:",
-      request
-    );
-
+    const request = await CustomDesignRequest.findOne({
+      _id: req.params.id,
+      customer: customerId
+    }).populate("customer", "name phone email profileImage");
 
     if (!request) {
-
       return res.status(404).json({
         success: false,
-        message: "Custom design request not found"
+        message: "Custom design request not found."
       });
     }
-
 
     return res.status(200).json({
       success: true,
-      message: "Custom design request fetched successfully",
       data: request
     });
 
   } catch (error) {
+    console.error("Get Custom Design Request Error:", error.message);
 
-    console.error(
-      "GET MY CUSTOM DESIGN REQUEST BY ID ERROR:",
-      error
-    );
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request ID."
+      });
+    }
 
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch custom design request",
-      error: error.message
+      message: "Failed to fetch custom design request."
     });
   }
 };
@@ -516,27 +352,21 @@ exports.cancelMyCustomDesignRequest = async (req, res) => {
 };
 
 
+// GET ALL CUSTOM DESIGN REQUESTS - ADMIN
 exports.getAllCustomDesignRequests = async (req, res) => {
   try {
-    let {
-      page = 1,
-      limit = 10,
-      status,
-      search
-    } = req.query;
+    let { page = 1, limit = 10, status, search } = req.query;
 
-    page = Math.max(Number(page), 1);
-    limit = Math.min(Math.max(Number(limit), 1), 100);
+    page = Math.max(Number(page) || 1, 1);
+    limit = Math.min(Math.max(Number(limit) || 10, 1), 100);
 
     const skip = (page - 1) * limit;
-
     const filter = {};
 
     if (status && status !== "ALL") {
       filter.status = status;
     }
 
-    // Search request number
     if (search && search.trim()) {
       filter.requestNumber = {
         $regex: search.trim(),
@@ -546,10 +376,7 @@ exports.getAllCustomDesignRequests = async (req, res) => {
 
     const [requests, total] = await Promise.all([
       CustomDesignRequest.find(filter)
-        .populate("customer")
-        .populate("category", "name image")
-        .populate("subCategory", "name image")
-        .populate("subSubCategory", "name image")
+        .populate("customer", "name phone email profileImage")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -559,6 +386,7 @@ exports.getAllCustomDesignRequests = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      count: requests.length,
       data: requests,
       pagination: {
         total,
@@ -569,11 +397,14 @@ exports.getAllCustomDesignRequests = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Get All Custom Design Requests Error:", error);
+    console.error(
+      "Get All Custom Design Requests Error:",
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch custom design requests",
+      message: "Failed to fetch custom design requests.",
       error: error.message
     });
   }
@@ -807,386 +638,109 @@ exports.deleteCustomDesignRequest = async (req, res) => {
 // =====================================================
 
 exports.updateMyCustomDesignRequest = async (req, res) => {
-
   try {
-
-    const { id } = req.params;
-
-    const userId =
-      req.user?._id ||
+    const customerId =
       req.user?.id ||
+      req.user?._id ||
       req.user?.userId;
 
-
-    console.log("=================================");
-    console.log("UPDATE REQUEST ID:", id);
-    console.log("USER ID:", userId);
-    console.log("BODY:", req.body);
-    console.log("FILES:", req.files);
-    console.log("=================================");
-
-
-    if (!userId) {
-
+    if (!customerId) {
       return res.status(401).json({
         success: false,
-        message: "User ID not found in token"
+        message: "Authentication required."
       });
     }
 
-
-    // =============================================
-    // FIND USER REQUEST
-    // =============================================
-
-    const request =
-      await CustomDesignRequest.findOne({
-        _id: id,
-        customer: userId
-      });
-
-
-    console.log(
-      "REQUEST FOUND:",
-      request
-    );
-
-
-    if (!request) {
-
-      return res.status(404).json({
-        success: false,
-        message: "Custom design request not found"
-      });
-    }
-
-
-    // =============================================
-    // EXISTING IMAGES TO KEEP
-    // =============================================
-
-    let existingImages = [];
-
-
-    if (req.body.existingImages) {
-
-      try {
-
-        existingImages =
-          JSON.parse(
-            req.body.existingImages
-          );
-
-      } catch (error) {
-
-        return res.status(400).json({
-          success: false,
-          message: "Invalid existingImages data"
-        });
-      }
-    }
-
-
-    // =============================================
-    // NEW FILES
-    // =============================================
-
-    const newFiles =
-      req.files || [];
-
-
-    // =============================================
-    // MAX 5 IMAGES
-    // =============================================
-
-    if (
-      existingImages.length +
-      newFiles.length > 5
-    ) {
-
-      return res.status(400).json({
-        success: false,
-        message: "Maximum 5 images are allowed"
-      });
-    }
-
-
-    // =============================================
-    // FIND REMOVED IMAGES
-    // =============================================
-
-    const oldImages =
-      request.referenceImages || [];
-
-
-    const keptPublicIds =
-      existingImages
-        .map(
-          image => image?.publicId
-        )
-        .filter(Boolean);
-
-
-    const removedImages =
-      oldImages.filter(
-        image => {
-
-          if (!image.publicId) {
-            return false;
-          }
-
-          return !keptPublicIds.includes(
-            image.publicId
-          );
-        }
-      );
-
-
-    // =============================================
-    // DELETE REMOVED CLOUDINARY IMAGES
-    // =============================================
-
-    for (
-      const image of removedImages
-    ) {
-
-      try {
-
-        await cloudinary.uploader.destroy(
-          image.publicId
-        );
-
-        console.log(
-          "Deleted Cloudinary image:",
-          image.publicId
-        );
-
-      } catch (error) {
-
-        console.error(
-          "Cloudinary delete error:",
-          error
-        );
-      }
-    }
-
-
-    // =============================================
-    // UPLOAD NEW IMAGES
-    // =============================================
-
-    const uploadedImages = [];
-
-
-    for (
-      const file of newFiles
-    ) {
-
-      const result =
-        await new Promise(
-          (resolve, reject) => {
-
-            const uploadStream =
-              cloudinary.uploader.upload_stream(
-                {
-                  folder:
-                    "custom-design-requests",
-                  resource_type:
-                    "image"
-                },
-
-                (
-                  error,
-                  result
-                ) => {
-
-                  if (error) {
-                    reject(error);
-                  } else {
-                    resolve(result);
-                  }
-                }
-              );
-
-
-            uploadStream.end(
-              file.buffer
-            );
-          }
-        );
-
-
-      uploadedImages.push({
-        url: result.secure_url,
-        publicId: result.public_id
-      });
-    }
-
-
-    // =============================================
-    // FINAL IMAGE ARRAY
-    // =============================================
-
-    request.referenceImages = [
-      ...existingImages,
-      ...uploadedImages
-    ];
-
-
-    // =============================================
-    // UPDATE OTHER FIELDS
-    // =============================================
-
-    if (
-      req.body.category !== undefined
-    ) {
-      request.category =
-        req.body.category;
-    }
-
-
-    if (
-      req.body.subCategory !== undefined
-    ) {
-      request.subCategory =
-        req.body.subCategory;
-    }
-
-
-    if (
-      req.body.subSubCategory !== undefined
-    ) {
-      request.subSubCategory =
-        req.body.subSubCategory;
-    }
-
-
-    if (
-      req.body.description !== undefined
-    ) {
-      request.description =
-        req.body.description;
-    }
-
-
-    if (
-      req.body.metalType !== undefined
-    ) {
-      request.metalType =
-        req.body.metalType || null;
-    }
-
-
-    if (
-      req.body.metalPurity !== undefined
-    ) {
-      request.metalPurity =
-        req.body.metalPurity || null;
-    }
-
-
-    if (
-      req.body.metalColor !== undefined
-    ) {
-      request.metalColor =
-        req.body.metalColor || null;
-    }
-
-
-    if (
-      req.body.stonePreference !== undefined
-    ) {
-      request.stonePreference =
-        req.body.stonePreference || null;
-    }
-
-
-    if (
-      req.body.budget !== undefined
-    ) {
-
-      request.budget =
-        req.body.budget === ""
-          ? null
-          : Number(req.body.budget);
-    }
-
-
-    if (
-      req.body.requiredDate !== undefined
-    ) {
-
-      request.requiredDate =
-        req.body.requiredDate || null;
-    }
-
-
-    // =============================================
-    // SAVE
-    // =============================================
-
-    const updatedRequest =
-      await request.save();
-
-
-    // =============================================
-    // POPULATE
-    // =============================================
-
-    await updatedRequest.populate([
-      {
-        path: "customer",
-        select: "name email phone"
-      },
-      {
-        path: "category",
-        select: "name"
-      },
-      {
-        path: "subCategory",
-        select: "name"
-      },
-      {
-        path: "subSubCategory",
-        select: "name"
-      }
-    ]);
-
-
-    // =============================================
-    // RESPONSE
-    // =============================================
-
-    return res.status(200).json({
-
-      success: true,
-
-      message:
-        "Custom design request updated successfully",
-
-      data: updatedRequest
-
+    const request = await CustomDesignRequest.findOne({
+      _id: req.params.id,
+      customer: customerId
     });
 
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: "Custom design request not found."
+      });
+    }
 
+    // Only allow editing requests that are still pending/reviewing.
+    if (!["PENDING", "UNDER_REVIEW"].includes(request.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "This request can no longer be edited."
+      });
+    }
+
+    const allowedFields = [
+      "jewelleryType",
+      "designType",
+      "description",
+      "metalType",
+      "goldPurity",
+      "goldColor",
+      "stoneType",
+      "diamondType",
+      "gemstoneType",
+      "requiredDate",
+      "preferredContactMethod",
+      "additionalNotes"
+    ];
+
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        request[field] = req.body[field];
+      }
+    }
+
+    if (req.body.goldWeight !== undefined) {
+      request.goldWeight = Number(req.body.goldWeight);
+    }
+
+    if (req.body.quantity !== undefined) {
+      request.quantity = Number(req.body.quantity);
+    }
+
+    // Preserve existing images when no new images are uploaded.
+    // If new files are supplied, upload them to Cloudinary first.
+    if (req.files?.length) {
+      const uploadedImages = [];
+
+      for (const file of req.files) {
+        const result = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "custom-design-requests" },
+            (error, uploadResult) => {
+              if (error) return reject(error);
+              resolve(uploadResult);
+            }
+          );
+
+          stream.end(file.buffer);
+        });
+
+        uploadedImages.push({
+          url: result.secure_url,
+          publicId: result.public_id
+        });
+      }
+
+      request.referenceImages = uploadedImages;
+    }
+
+    await request.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Custom design request updated successfully.",
+      data: request
+    });
   } catch (error) {
-
-    console.error(
-      "UPDATE CUSTOM DESIGN ERROR:",
-      error
-    );
-
+    console.error("Update Custom Design Request Error:", error.message);
 
     return res.status(500).json({
-
       success: false,
-
-      message:
-        "Failed to update custom design request",
-
-      error:
-        error.message
-
+      message: "Failed to update custom design request.",
+      error: error.message
     });
   }
 };

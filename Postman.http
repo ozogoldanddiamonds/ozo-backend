@@ -396,6 +396,7 @@ GET http://localhost:3001/api/getAllAddress
 Content-Type: application/json
 
 
+
 ###
 POST  http://localhost:3001/api/createBanner
 
@@ -796,3 +797,8 @@ Content-Type: application/json
 ###
 GET http://localhost:3001/api/get-purchase-items/6a928d4798b45fdcfc794238
 Content-Type: application/json
+
+###
+GET http://localhost:3001/api/my-requests
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWIyMjQ2MjUxMzA5Mjc3ZjY4ZDg4MDUiLCJpYXQiOjE3OTE2MTM5MTgsImV4cCI6MTc5MjIxODcxOH0.WrqVeqWVWhvtn44VAKlsF11s3znNGfq36CoLr-1al6E
