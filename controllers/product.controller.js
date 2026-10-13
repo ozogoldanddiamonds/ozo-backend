@@ -2237,13 +2237,11 @@ exports.getProductsByType = async (
 };
 
 exports.getProductsByCategory = async (req, res) => {
-
   try {
-
     const {
-
       category,
       subCategory,
+      subSubCategory,
       productType,
       search = "",
       minPrice,
@@ -2253,287 +2251,227 @@ exports.getProductsByCategory = async (req, res) => {
       trending,
       bestSeller,
       gender,
+      metalPurity = "",
       page = 1,
       limit = 10
-
     } = req.query;
+
+    // =========================
+    // VALIDATE PAGINATION
+    // =========================
+
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageSize = Math.max(1, Number(limit) || 10);
+
+    // =========================
+    // BUILD PRODUCT FILTER
+    // =========================
 
     const filter = {
       isActive: true
     };
 
-    if (category)
+    if (category) {
       filter.category = category;
+    }
 
-    if (subCategory)
+    if (subCategory) {
       filter.subCategory = subCategory;
+    }
 
-    if (
-      productType &&
-      productType !== "ALL"
-    ) {
+    if (subSubCategory) {
+      filter.subSubCategory = subSubCategory;
+    }
+
+    if (productType && productType !== "ALL") {
       filter.productType = productType;
     }
 
-    if (featured === "true")
+    if (featured === "true") {
       filter.featured = true;
+    }
 
-    if (trending === "true")
+    if (trending === "true") {
       filter.trending = true;
+    }
 
-    if (bestSeller === "true")
+    if (bestSeller === "true") {
       filter.bestSeller = true;
+    }
 
-    if (gender)
+    if (gender) {
       filter.gender = gender;
+    }
 
-    if (search) {
-
+    if (search.trim()) {
       filter.name = {
-        $regex: search,
+        $regex: search.trim(),
         $options: "i"
       };
-
     }
 
     // =========================
     // FETCH PRODUCTS
     // =========================
 
-    const products =
-
-      await Product.find(filter)
-
-        .populate(
-          "category",
-          "name image"
-        )
-
-        .populate(
-          "subCategory",
-          "name image"
-        )
-
-        .populate(
-          "subSubCategory",
-          "name image"
-        )
-
-        .sort({
-          createdAt: -1
-        })
-
-        .lean();
+    const products = await Product.find(filter)
+      .populate("category", "name image")
+      .populate("subCategory", "name image")
+      .populate("subSubCategory", "name image")
+      .sort({ createdAt: -1 })
+      .lean();
 
     // =========================
     // CALCULATE VARIANT PRICES
     // =========================
 
-    let updatedProducts =
+    let updatedProducts = await Promise.all(
+      products.map(async (product) => {
+        const productVariants = product.variants || [];
 
-      await Promise.all(
-
-        products.map(
-          async product => {
-
-            const variants =
-
-              await Promise.all(
-
-                product.variants.map(
-                  async variant => {
-
-                    const priceDetails =
-                      await calculateVariantPrice(
-                        variant
-                      );
-
-                    return {
-                      ...variant,
-                      priceDetails
-                    };
-
-                  }
-                )
-
-              );
+        const variants = await Promise.all(
+          productVariants.map(async (variant) => {
+            const priceDetails = await calculateVariantPrice(variant);
 
             return {
-              ...product,
-              variants
+              ...variant,
+              priceDetails
             };
+          })
+        );
 
-          }
+        return {
+          ...product,
+          variants
+        };
+      })
+    );
+
+    // =========================
+    // GET COMPARABLE PRICE
+    // =========================
+
+    const getComparablePrice = (product) => {
+      let variants = product.variants || [];
+
+      // If purity is selected, consider only matching variants
+      // Filter products by selected metal purity
+      if (metalPurity && metalPurity.trim() !== "") {
+        updatedProducts = updatedProducts.filter((product) =>
+          (product.variants || []).some(
+            (variant) =>
+              String(variant.metalPurity || "").trim().toUpperCase() ===
+              String(metalPurity).trim().toUpperCase()
+          )
+        );
+      }
+
+      const prices = variants
+        .map((variant) =>
+          Number(variant.priceDetails?.finalPrice)
         )
+        .filter(
+          (price) => Number.isFinite(price) && price > 0
+        );
 
-      );
+      return prices.length > 0
+        ? Math.min(...prices)
+        : null;
+    };
 
     // =========================
     // PRICE FILTER
     // =========================
 
-    if (minPrice || maxPrice) {
+    const hasMinPrice =
+      minPrice !== undefined && minPrice !== "";
 
-      updatedProducts =
+    const hasMaxPrice =
+      maxPrice !== undefined && maxPrice !== "";
 
-        updatedProducts.filter(
-          product => {
+    if (hasMinPrice || hasMaxPrice) {
+      updatedProducts = updatedProducts.filter((product) => {
+        const price = getComparablePrice(product);
 
-            const lowestPrice =
+        if (price === null) {
+          return false;
+        }
 
-              Math.min(
+        const meetsMin =
+          !hasMinPrice || price >= Number(minPrice);
 
-                ...product.variants.map(
-                  v =>
-                    v.priceDetails?.finalPrice || 0
-                )
+        const meetsMax =
+          !hasMaxPrice || price <= Number(maxPrice);
 
-              );
-
-            return (
-
-              (!minPrice ||
-                lowestPrice >= Number(minPrice))
-
-              &&
-
-              (!maxPrice ||
-                lowestPrice <= Number(maxPrice))
-
-            );
-
-          }
-        );
-
+        return meetsMin && meetsMax;
+      });
     }
 
     // =========================
     // SORTING
     // =========================
 
-    if (sort === "lowToHigh") {
+    if (sort === "lowToHigh" || sort === "highToLow") {
+      updatedProducts.sort((a, b) => {
+        const aPrice = getComparablePrice(a);
+        const bPrice = getComparablePrice(b);
 
-      updatedProducts.sort(
-        (a, b) => {
-
-          const aPrice =
-
-            Math.min(
-              ...a.variants.map(
-                v =>
-                  v.priceDetails?.finalPrice || 0
-              )
-            );
-
-          const bPrice =
-
-            Math.min(
-              ...b.variants.map(
-                v =>
-                  v.priceDetails?.finalPrice || 0
-              )
-            );
-
-          return aPrice - bPrice;
-
+        // Products without a valid comparable price go last
+        if (aPrice === null && bPrice === null) {
+          return 0;
         }
-      );
 
+        if (aPrice === null) {
+          return 1;
+        }
+
+        if (bPrice === null) {
+          return -1;
+        }
+
+        return sort === "lowToHigh"
+          ? aPrice - bPrice
+          : bPrice - aPrice;
+      });
     }
 
-    else if (
-      sort === "highToLow"
-    ) {
-
-      updatedProducts.sort(
-        (a, b) => {
-
-          const aPrice =
-
-            Math.min(
-              ...a.variants.map(
-                v =>
-                  v.priceDetails?.finalPrice || 0
-              )
-            );
-
-          const bPrice =
-
-            Math.min(
-              ...b.variants.map(
-                v =>
-                  v.priceDetails?.finalPrice || 0
-              )
-            );
-
-          return bPrice - aPrice;
-
-        }
-      );
-
-    }
+    // "latest" keeps the createdAt descending order from the query
 
     // =========================
     // PAGINATION
     // =========================
 
-    const total =
-      updatedProducts.length;
+    const total = updatedProducts.length;
 
-    const skip =
-      (Number(page) - 1) *
-      Number(limit);
+    const skip = (currentPage - 1) * pageSize;
 
-    const paginatedProducts =
-
-      updatedProducts.slice(
-        skip,
-        skip + Number(limit)
-      );
+    const paginatedProducts = updatedProducts.slice(
+      skip,
+      skip + pageSize
+    );
 
     // =========================
     // RESPONSE
     // =========================
 
-    res.status(200).json({
-
+    return res.status(200).json({
       success: true,
-
       total,
-
-      currentPage:
-        Number(page),
-
-      totalPages:
-        Math.ceil(
-          total / Number(limit)
-        ),
-
-      count:
-        paginatedProducts.length,
-
-      data:
-        paginatedProducts
-
+      currentPage,
+      totalPages: Math.ceil(total / pageSize),
+      count: paginatedProducts.length,
+      data: paginatedProducts
     });
 
   } catch (error) {
+    console.error("getProductsByCategory error:", error);
 
-    console.log(error);
-
-    res.status(500).json({
-
+    return res.status(500).json({
       success: false,
-
-      message:
-        error.message
-
+      message: error.message
     });
-
   }
-
 };
-
 // =========================status
 exports.changeProductStatus = async (req, res) => {
   try {
