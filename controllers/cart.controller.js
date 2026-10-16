@@ -517,67 +517,91 @@ exports.getCart = async (req, res) => {
 /*
 UPDATE CART ITEM
 */
+
 exports.updateCartItem = async (req, res) => {
   try {
-    console.log("BODY:", req.body);
+    const { quantity } = req.body || {};
+    const requestedQuantity = Number(quantity);
 
-    const { quantity } =
-      req.body || {};
-
-    if (quantity === undefined) {
+    if (
+      !Number.isInteger(requestedQuantity) ||
+      requestedQuantity < 1
+    ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Quantity is required"
+        message: "Quantity must be a positive integer"
       });
     }
 
-    const cart =
-      await Cart.findById(
-        req.params.cartId
-      );
+    const cart = await Cart.findById(req.params.cartId);
 
     if (!cart) {
       return res.status(404).json({
         success: false,
-        message:
-          "Cart not found"
+        message: "Cart not found"
       });
     }
 
-    const item =
-      cart.items.id(
-        req.params.itemId
-      );
+    const item = cart.items.id(req.params.itemId);
 
     if (!item) {
       return res.status(404).json({
         success: false,
-        message:
-          "Cart item not found"
+        message: "Cart item not found"
       });
     }
 
-    item.quantity =
-      Number(quantity);
+    const product = await Product.findById(item.product);
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found"
+      });
+    }
+
+    const variant = product.variants.id(item.variantId);
+
+    if (!variant) {
+      return res.status(404).json({
+        success: false,
+        message: "Product variant not found"
+      });
+    }
+
+    const stock = Number(variant.stock) || 0;
+
+    if (stock <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Out of stock"
+      });
+    }
+
+    if (requestedQuantity > stock) {
+      return res.status(400).json({
+        success: false,
+        message: `Only ${stock} item(s) available in stock`
+      });
+    }
+
+    item.quantity = requestedQuantity;
 
     await cart.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message:
-        "Cart updated successfully",
+      message: "Cart updated successfully",
       data: cart
     });
-
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message:
-        error.message
+      message: error.message
     });
   }
 };
+
 
 
 /*
