@@ -1,4 +1,7 @@
 const mongoose = require("mongoose");
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
+const PaymentAttempt = require("../models/payment-attempt");
 const Order = require("../models/order");
 const Product = require("../models/product");
 const User = require("../models/user-login");
@@ -9,7 +12,291 @@ const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const MakerProductionItem = require("../models/maker-production-item");
 
 const calculateVariantPrice = require("../utils/price-calculator");
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
+
+exports.createRazorpayOrder = async (req, res) => {
+    try {
+        const userId = req.user?.userId;
+
+        const {
+            productId,
+            variantId,
+            quantity,
+            addressId
+        } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Please login first"
+            });
+        }
+
+        if (
+            !productId ||
+            !variantId ||
+            !addressId ||
+            !Number.isInteger(Number(quantity)) ||
+            Number(quantity) < 1
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid product, variant, quantity and address are required"
+            });
+        }
+
+        const product = await Product.findById(productId);
+
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                message: "Product not found"
+            });
+        }
+
+        const variant = product.variants.id(variantId);
+
+        if (!variant) {
+            return res.status(404).json({
+                success: false,
+                message: "Product variant not found"
+            });
+        }
+
+        if (Number(variant.stock) < Number(quantity)) {
+            return res.status(400).json({
+                success: false,
+                message: "Insufficient stock"
+            });
+        }
+
+        // Recalculate price on the backend.
+        const priceDetails = await calculateVariantPrice(variant);
+
+        // finalPrice already includes GST according to your calculator.
+        const totalAmount = Number(
+            (Number(priceDetails.finalPrice) * Number(quantity)).toFixed(2)
+        );
+
+        if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid payment amount"
+            });
+        }
+
+        // TODO: Validate that this address belongs to the authenticated user.
+        // Add that check using your actual Address schema before production.
+
+        const razorpayOrder = await razorpay.orders.create({
+            amount: Math.round(totalAmount * 100),
+            currency: "INR",
+            receipt: `pay_${Date.now()}`
+        });
+
+        const attempt = await PaymentAttempt.create({
+            user: userId,
+            product: product._id,
+            variantId: variant._id.toString(),
+            quantity: Number(quantity),
+            address: addressId,
+            amount: totalAmount,
+            currency: "INR",
+            razorpayOrderId: razorpayOrder.id,
+            status: "CREATED"
+        });
+
+        return res.status(201).json({
+            success: true,
+            message: "Razorpay order created",
+            data: {
+                paymentAttemptId: attempt._id,
+                razorpayOrderId: razorpayOrder.id,
+                amount: razorpayOrder.amount,
+                currency: razorpayOrder.currency,
+                keyId: process.env.RAZORPAY_KEY_ID
+            }
+        });
+    } catch (error) {
+        console.error("Create Razorpay Order Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to initiate payment"
+        });
+    }
+};
+
+exports.verifyRazorpayPayment = async (req, res) => {
+    try {
+        const userId = req.user?.userId;
+
+        const {
+            paymentAttemptId,
+            razorpay_order_id,
+            razorpay_payment_id,
+            razorpay_signature
+        } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Please login first"
+            });
+        }
+
+        if (
+            !paymentAttemptId ||
+            !razorpay_order_id ||
+            !razorpay_payment_id ||
+            !razorpay_signature
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Required payment details are missing"
+            });
+        }
+
+        const attempt = await PaymentAttempt.findOne({
+            _id: paymentAttemptId,
+            user: userId,
+            razorpayOrderId: razorpay_order_id
+        });
+
+        if (!attempt) {
+            return res.status(404).json({
+                success: false,
+                message: "Payment attempt not found"
+            });
+        }
+
+        // Idempotency: don't process an already verified payment again.
+        if (
+            attempt.status === "PAID" ||
+            attempt.status === "ORDER_CREATED"
+        ) {
+            return res.status(200).json({
+                success: true,
+                message: "Payment already verified",
+                data: {
+                    paymentAttemptId: attempt._id,
+                    status: attempt.status,
+                    orderId: attempt.order || null
+                }
+            });
+        }
+
+        if (attempt.status !== "CREATED") {
+            return res.status(400).json({
+                success: false,
+                message: "This payment attempt cannot be verified"
+            });
+        }
+
+        // Generate signature using the server-side secret.
+        const expectedSignature = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+            .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
+            .digest("hex");
+
+        const expectedBuffer = Buffer.from(expectedSignature);
+        const receivedBuffer = Buffer.from(razorpay_signature);
+
+        if (
+            expectedBuffer.length !== receivedBuffer.length ||
+            !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid payment signature"
+            });
+        }
+
+        // Verify payment details directly with Razorpay.
+        const payment = await razorpay.payments.fetch(
+            razorpay_payment_id
+        );
+
+        if (payment.order_id !== attempt.razorpayOrderId) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment does not match the Razorpay order"
+            });
+        }
+
+        if (
+            payment.amount !== Math.round(attempt.amount * 100) ||
+            payment.currency !== attempt.currency
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment amount or currency mismatch"
+            });
+        }
+
+        if (payment.status !== "captured") {
+            return res.status(409).json({
+                success: false,
+                message: "Payment is not captured yet",
+                paymentStatus: payment.status
+            });
+        }
+
+        // Atomically claim this attempt so concurrent requests
+        // cannot verify and process it twice.
+        const updatedAttempt = await PaymentAttempt.findOneAndUpdate(
+            {
+                _id: attempt._id,
+                user: userId,
+                status: "CREATED"
+            },
+            {
+                $set: {
+                    status: "PAID",
+                    razorpayPaymentId: razorpay_payment_id
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedAttempt) {
+            const latest = await PaymentAttempt.findById(attempt._id);
+
+            return res.status(200).json({
+                success: true,
+                message: "Payment attempt was already processed",
+                data: {
+                    paymentAttemptId: latest?._id,
+                    status: latest?.status,
+                    orderId: latest?.order || null
+                }
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Payment verified successfully",
+            data: {
+                paymentAttemptId: updatedAttempt._id,
+                razorpayOrderId: updatedAttempt.razorpayOrderId,
+                razorpayPaymentId: updatedAttempt.razorpayPaymentId,
+                status: updatedAttempt.status
+            }
+        });
+
+    } catch (error) {
+        console.error("Razorpay Verification Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to verify payment"
+        });
+    }
+};
 // ======================================================
 // CREATE ORDER
 // ======================================================

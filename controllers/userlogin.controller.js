@@ -87,80 +87,79 @@ exports.Userregister =
     }
   };
 
-exports.userLogin =
-  async (req, res) => {
-    try {
-      const {
-        phone,
-        password
-      } = req.body || {};
+exports.userLogin = async (req, res) => {
+  try {
+    const {
+      phone,
+      password
+    } = req.body || {};
 
-      if (!phone || !password) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Phone and Password are required"
-        });
-      }
-
-      const user =
-        await User.findOne({
-          phone
-        });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message:
-            "User not found"
-        });
-      }
-
-      const isMatch =
-        await bcrypt.compare(
-          password,
-          user.password
-        );
-
-      if (!isMatch) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Invalid password"
-        });
-      }
-
-      const token = jwt.sign(
-        {
-          userId: user._id
-        },
-        process.env.JWT_SECRET,
-        {
-          expiresIn: "7d"
-        }
-      );
-
-      user.token =
-        token;
-
-      await user.save();
-
-      res.status(200).json({
-        success: true,
-        message:
-          "Login successful",
-        token,
-        user
-      });
-
-    } catch (error) {
-      res.status(500).json({
+    if (!phone || !password) {
+      return res.status(400).json({
         success: false,
         message:
-          error.message
+          "Phone and Password are required"
       });
     }
-  };
+
+    const user =
+      await User.findOne({
+        phone
+      });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "User not found"
+      });
+    }
+
+    const isMatch =
+      await bcrypt.compare(
+        password,
+        user.password
+      );
+
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid password"
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user._id
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d"
+      }
+    );
+
+    user.token =
+      token;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message:
+        "Login successful",
+      token,
+      user
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message:
+        error.message
+    });
+  }
+};
 
 
 // forgot password

@@ -1,32 +1,16 @@
 const mongoose = require("mongoose");
 
-// ======================================================
-// ORDER ITEM
-// ======================================================
-
 const orderItemSchema = new mongoose.Schema({
-
-    // ==================================================
-    // PRODUCT
-    // ==================================================
-
     product: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Product",
         required: true
     },
-
     // Embedded Product Variant _id
     variant: {
         type: mongoose.Schema.Types.ObjectId,
         required: true
     },
-
-    // ==================================================
-    // PRODUCT SNAPSHOT
-    // ==================================================
-    // Product future lo change/delete ayina
-    // order time lo unna information preserve avuthundi.
 
     productSnapshot: {
 
@@ -36,146 +20,72 @@ const orderItemSchema = new mongoose.Schema({
         },
 
         slug: String,
-
         image: String,
-
         category: String,
-
         subCategory: String,
-
         subSubCategory: String,
-
         productType: String,
-
         brand: String
     },
-
-    // ==================================================
-    // STOCK SOURCE ALLOCATIONS
-    // ==================================================
-    // Oka order item quantity multiple sources nunchi
-    // allocate avvachu.
-    //
-    // Example:
-    //
-    // Quantity = 5
-    //
-    // Supplier A -> 2
-    // Supplier B -> 2
-    // Maker A    -> 1
-
     stockAllocations: [{
-
         sourceType: {
             type: String,
             enum: ["SUPPLIER", "MAKER"],
             required: true
         },
-
         supplierPurchaseItem: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "SupplierPurchaseItem",
             default: null
         },
-
         makerProductionItem: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "MakerProductionItem",
             default: null
         },
-
         quantity: {
             type: Number,
             required: true,
             min: 1
         }
-
     }],
-
-    // ==================================================
-    // VARIANT SNAPSHOT
-    // ==================================================
-
     variantSnapshot: {
-
         sku: String,
-
         metalType: String,
-
         purity: String,
-
         metalColor: String,
-
         size: String,
-
         grossWeight: Number,
-
         netWeight: Number,
-
         wastagePercentage: Number,
-
         stoneWeight: Number,
-
         diamondWeight: Number,
-
         makingCharge: Number,
-
         makingChargeType: String,
-
         discountPercentage: Number,
-
         stoneType: String,
-
         gender: String,
-
         stones: [{
-
             stoneType: String,
-
             stoneCategory: String,
-
             quality: String,
-
             quantity: Number,
-
             totalWeight: Number,
-
             stoneValue: Number
-
         }]
     },
-
-    // ==================================================
-    // PRICE SNAPSHOT
-    // ==================================================
-
     pricingSnapshot: {
-
         goldRate: Number,
-
         goldValue: Number,
-
         wastageAmount: Number,
-
         stoneValue: Number,
-
         diamondValue: Number,
-
         makingCharge: Number,
-
         discountAmount: Number,
-
         gstPercentage: Number,
-
         gstAmount: Number,
-
         finalPrice: Number
     },
-
-    // ==================================================
-    // QUANTITY & PRICE
-    // ==================================================
-
     quantity: {
         type: Number,
         required: true,
@@ -195,18 +105,7 @@ const orderItemSchema = new mongoose.Schema({
     }
 
 });
-
-
-// ======================================================
-// ORDER
-// ======================================================
-
 const orderSchema = new mongoose.Schema({
-
-    // ==================================================
-    // ORDER
-    // ==================================================
-
     orderNumber: {
         type: String,
         unique: true,
@@ -224,11 +123,6 @@ const orderSchema = new mongoose.Schema({
         enum: ["ONLINE", "BRANCH", "SUB_BRANCH"],
         required: true
     },
-
-    // ==================================================
-    // BRANCH
-    // ==================================================
-
     branch: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Admin",
@@ -246,11 +140,6 @@ const orderSchema = new mongoose.Schema({
         ref: "Admin",
         default: null
     },
-
-    // ==================================================
-    // CUSTOMER
-    // ==================================================
-
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
@@ -265,11 +154,6 @@ const orderSchema = new mongoose.Schema({
 
         email: String
     },
-
-    // ==================================================
-    // ITEMS
-    // ==================================================
-
     items: {
         type: [orderItemSchema],
         required: true,
@@ -281,11 +165,6 @@ const orderSchema = new mongoose.Schema({
             message: "At least one order item is required"
         }
     },
-
-    // ==================================================
-    // ADDRESS
-    // ==================================================
-
     address: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Address",
@@ -342,6 +221,17 @@ const orderSchema = new mongoose.Schema({
             "Refunded"
         ],
         default: "Pending"
+    },
+
+    razorpayOrderId: {
+        type: String,
+        default: null,
+        index: true
+    },
+
+    razorpayPaymentId: {
+        type: String,
+        default: null
     },
 
     paymentHistory: [{

@@ -22,7 +22,7 @@ const { createCoupon, getAllCoupons, getCouponById, updateCoupon, deleteCoupon }
 const { createReview, getAllReviews, getReviewById, getProductReviews, updateReview, deleteReview } = require("../controllers/review.controller");
 const { createMetalRate, getAllMetalRates, getMetalRateById, updateMetalRate, deleteMetalRate, toggleMetalRateStatus } = require("../controllers/metal-rate.controller");
 const { createStoneRate, getAllStoneRates, getStoneRateById, updateStoneRate, deleteStoneRate, toggleStoneRateStatus } = require("../controllers/stone-rate.controller");
-const { calculatePrice, deleteOrder, createOrder, getAllOrders, getOrderById, getOrdersByUser, getBranchOrders, getSubBranchOrders } = require("../controllers/order.controller");
+const { calculatePrice, deleteOrder, createRazorpayOrder, verifyRazorpayPayment, createOrder, getAllOrders, getOrderById, getOrdersByUser, getBranchOrders, getSubBranchOrders } = require("../controllers/order.controller");
 
 const { createSizeChart, getAllSizeCharts, getSizeChartBySubCategory, updateSizeChart, deleteSizeChart } = require("../controllers/size-chart.controller");
 const { createAds, getAllAds, getAdsById, updateSection, deleteAds, updateAdsStatus } = require("../controllers/adss.controller");
@@ -48,6 +48,8 @@ const { createMakerProduction, getAllMakerProductions, getMakerProductionById, g
 const { createMakerProductionItem, getAllMakerProductionItems, getProductionItems, getProductProductionItems, getVariantProductionItems, getMakerProductionItemById, updateMakerProductionItem, deleteMakerProductionItem } = require("../controllers/maker-production-item.controller");
 
 const { createCustomDesignRequest, getMyCustomDesignRequests, getMyCustomDesignRequestById, cancelMyCustomDesignRequest, getAllCustomDesignRequests, getCustomDesignRequestById, updateCustomDesignRequestStatus, updateCustomDesignRequestNotes, deleteCustomDesignRequest, updateMyCustomDesignRequest } = require("../controllers/custom-design.controller");
+const { getMetaKeyWord, upsertMetaKeyWordsSEO, getMetaKeywordsSEOById } = require("../controllers/meta-key-words.controller");
+
 
 router.post("/create-contact", createContact);
 router.get("/getall-contact", getAllContacts);
@@ -201,6 +203,9 @@ router.get("/get-size-chart-by-sub-category/:subCategoryId", getSizeChartBySubCa
 router.put("/update-size-chart/:id", upload.single("image"), updateSizeChart);
 router.delete("/delete-size-chart/:id", deleteSizeChart);
 
+
+router.post("/createRazorpayOrder", verifyToken, createRazorpayOrder);
+router.post("/verifyRazorpayPayment", verifyToken, verifyRazorpayPayment);
 router.post("/createOrder", createOrder);
 router.get("/getAllOrders", getAllOrders);
 router.get("/get-order/:id", getOrderById);
@@ -535,6 +540,12 @@ router.put(
   upload.array("referenceImages", 5),
   updateMyCustomDesignRequest
 );
+
+
+// Public: frontend homepage reads SEO settings
+router.get("/get-meta-keyowords-seo", getMetaKeyWord);
+router.put("/update-meta-keyowords-seo", upsertMetaKeyWordsSEO, getMetaKeywordsSEOById);
+router.get("/getMetaKeywordsSEOById/:id", getMetaKeywordsSEOById);
 
 
 

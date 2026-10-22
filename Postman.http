@@ -802,3 +802,50 @@ Content-Type: application/json
 GET http://localhost:3001/api/my-requests
 Content-Type: application/json
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWIyMjQ2MjUxMzA5Mjc3ZjY4ZDg4MDUiLCJpYXQiOjE3OTE2MTM5MTgsImV4cCI6MTc5MjIxODcxOH0.WrqVeqWVWhvtn44VAKlsF11s3znNGfq36CoLr-1al6E
+
+
+###
+PUT http://localhost:3001/api/update-meta-keyowords-seo
+Content-Type: application/json
+
+{
+  "metaTitle": "OZO Gold & Diamond Jewellery | Shop Online",
+  "metaDescription": "Explore gold jewellery, diamond rings, bridal jewellery and elegant designs at OZO Gold & Diamond Jewellery.",
+  "metaKeywords": [
+    "OZO Jewellery",
+    "gold jewellery",
+    "diamond jewellery",
+    "bridal jewellery",
+    "gold rings",
+    "diamond earrings"
+  ],
+  "canonicalUrl": "https://your-domain.com/",
+  "ogTitle": "OZO Gold & Diamond Jewellery",
+  "ogDescription": "Discover elegant gold and diamond jewellery collections.",
+  "ogImage": "https://your-domain.com/assets/images/og-home.jpg",
+  "isActive": true
+}
+
+
+
+###
+GET http://localhost:3001/api/get-meta-keyowords-seo
+Content-Type: application/json
+  
+
+###
+GET http://localhost:3001/api/getMetaKeywordsSEOById/6ad212e01faa82e6090e8b6d
+Content-Type: application/json
+
+
+###
+POST http://localhost:3001/api/createRazorpayOrder
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWIyMjQ2MjUxMzA5Mjc3ZjY4ZDg4MDUiLCJpYXQiOjE3OTI2NjU4MDYsImV4cCI6MTc5MzI3MDYwNn0.L_N_o9S6g9Rxv1TU3Q5AFSBJ3J-7ZD_m5P4egBbDyV4
+
+{
+  "productId": "6ac9049bf1d4f6e7a5b1fcde",
+  "variantId": "6ad1c381ce0006648b68ff75",
+  "quantity": 1,
+  "addressId": "6acb534b398972e13ad02edf"
+}
