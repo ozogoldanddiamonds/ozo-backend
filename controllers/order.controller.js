@@ -18,6 +18,7 @@ const razorpay = new Razorpay({
 });
 
 
+
 exports.createRazorpayOrder = async (req, res) => {
     try {
         const userId = req.user?.userId;
@@ -26,6 +27,7 @@ exports.createRazorpayOrder = async (req, res) => {
             productId,
             variantId,
             quantity,
+            items,
             addressId
         } = req.body;
 
@@ -36,51 +38,135 @@ exports.createRazorpayOrder = async (req, res) => {
             });
         }
 
-        if (
-            !productId ||
-            !variantId ||
-            !addressId ||
-            !Number.isInteger(Number(quantity)) ||
-            Number(quantity) < 1
-        ) {
+        if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
             return res.status(400).json({
                 success: false,
-                message: "Valid product, variant, quantity and address are required"
+                message: "Valid address is required"
             });
         }
 
-        const product = await Product.findById(productId);
+        /*
+         * Support both:
+         * 1. Buy Now: productId, variantId, quantity
+         * 2. Cart: items [{ productId, variantId, quantity }]
+         */
+        let checkoutItems = [];
 
-        if (!product) {
-            return res.status(404).json({
-                success: false,
-                message: "Product not found"
-            });
+        if (Array.isArray(items) && items.length > 0) {
+            checkoutItems = items.map(item => ({
+                productId: item.productId || item.product,
+                variantId: item.variantId || item.variant,
+                quantity: Number(item.quantity)
+            }));
+        } else if (productId && variantId) {
+            checkoutItems = [{
+                productId,
+                variantId,
+                quantity: Number(quantity)
+            }];
         }
 
-        const variant = product.variants.id(variantId);
-
-        if (!variant) {
-            return res.status(404).json({
-                success: false,
-                message: "Product variant not found"
-            });
-        }
-
-        if (Number(variant.stock) < Number(quantity)) {
+        if (!checkoutItems.length) {
             return res.status(400).json({
                 success: false,
-                message: "Insufficient stock"
+                message: "At least one valid product and variant are required"
             });
         }
 
-        // Recalculate price on the backend.
-        const priceDetails = await calculateVariantPrice(variant);
+        /*
+         * Validate input and aggregate duplicate product/variant entries.
+         */
+        const aggregatedItems = new Map();
 
-        // finalPrice already includes GST according to your calculator.
-        const totalAmount = Number(
-            (Number(priceDetails.finalPrice) * Number(quantity)).toFixed(2)
-        );
+        for (const item of checkoutItems) {
+            if (
+                !item.productId ||
+                !mongoose.Types.ObjectId.isValid(item.productId) ||
+                !item.variantId ||
+                typeof item.variantId !== "string" ||
+                !item.variantId.trim() ||
+                !Number.isInteger(item.quantity) ||
+                item.quantity < 1
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Each item must have a valid product, variant and quantity"
+                });
+            }
+
+            const key = `${item.productId}_${item.variantId}`;
+
+            if (aggregatedItems.has(key)) {
+                const existingItem = aggregatedItems.get(key);
+                existingItem.quantity += item.quantity;
+            } else {
+                aggregatedItems.set(key, {
+                    productId: item.productId,
+                    variantId: item.variantId,
+                    quantity: item.quantity
+                });
+            }
+        }
+
+        checkoutItems = Array.from(aggregatedItems.values());
+
+        let totalAmount = 0;
+        const paymentAttemptItems = [];
+
+        /*
+         * Fetch products and calculate every variant's price on the backend.
+         */
+        for (const item of checkoutItems) {
+            const product = await Product.findById(item.productId);
+
+            if (!product) {
+                return res.status(404).json({
+                    success: false,
+                    message: `Product not found: ${item.productId}`
+                });
+            }
+
+            const variant = product.variants.id(item.variantId);
+
+            if (!variant) {
+                return res.status(404).json({
+                    success: false,
+                    message: `Variant not found for product: ${product.name || product._id}`
+                });
+            }
+
+            const availableStock = Number(variant.stock);
+
+            if (
+                !Number.isFinite(availableStock) ||
+                availableStock < item.quantity
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Insufficient stock for ${product.name || "a product"}`
+                });
+            }
+
+            const priceDetails = await calculateVariantPrice(variant);
+            const unitPrice = Number(priceDetails?.finalPrice);
+
+            if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid price for ${product.name || "a product"}`
+                });
+            }
+
+            totalAmount += unitPrice * item.quantity;
+
+            paymentAttemptItems.push({
+                product: product._id,
+                variantId: variant._id.toString(),
+                quantity: item.quantity
+            });
+        }
+
+        totalAmount = Number(totalAmount.toFixed(2));
 
         if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
             return res.status(400).json({
@@ -89,8 +175,11 @@ exports.createRazorpayOrder = async (req, res) => {
             });
         }
 
-        // TODO: Validate that this address belongs to the authenticated user.
-        // Add that check using your actual Address schema before production.
+        /*
+         * IMPORTANT:
+         * Address ownership must also be validated against your actual
+         * Address schema before accepting a payment.
+         */
 
         const razorpayOrder = await razorpay.orders.create({
             amount: Math.round(totalAmount * 100),
@@ -98,17 +187,31 @@ exports.createRazorpayOrder = async (req, res) => {
             receipt: `pay_${Date.now()}`
         });
 
-        const attempt = await PaymentAttempt.create({
+        const isBuyNow = paymentAttemptItems.length === 1 &&
+            !Array.isArray(items);
+
+        const attemptData = {
             user: userId,
-            product: product._id,
-            variantId: variant._id.toString(),
-            quantity: Number(quantity),
             address: addressId,
             amount: totalAmount,
             currency: "INR",
             razorpayOrderId: razorpayOrder.id,
-            status: "CREATED"
-        });
+            status: "CREATED",
+            checkoutMode: isBuyNow ? "BUY_NOW" : "CART",
+            items: paymentAttemptItems
+        };
+
+        /*
+         * Keep legacy single-product fields populated for Buy Now.
+         * This helps existing code that still reads these fields.
+         */
+        if (isBuyNow) {
+            attemptData.product = paymentAttemptItems[0].product;
+            attemptData.variantId = paymentAttemptItems[0].variantId;
+            attemptData.quantity = paymentAttemptItems[0].quantity;
+        }
+
+        const attempt = await PaymentAttempt.create(attemptData);
 
         return res.status(201).json({
             success: true,
@@ -130,6 +233,7 @@ exports.createRazorpayOrder = async (req, res) => {
         });
     }
 };
+
 
 
 exports.verifyRazorpayPayment = async (req, res) => {
@@ -175,7 +279,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Already completed: return the existing order.
+        // Return the existing order if already completed.
         if (attempt.status === "ORDER_CREATED") {
             return res.status(200).json({
                 success: true,
@@ -188,7 +292,6 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Only a new or previously verified attempt can continue.
         if (!["CREATED", "PAID"].includes(attempt.status)) {
             return res.status(409).json({
                 success: false,
@@ -197,7 +300,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Verify Razorpay signature on the server.
+        // Verify the Razorpay signature on the server.
         const expectedSignature = crypto
             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
             .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
@@ -216,7 +319,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Confirm the payment directly with Razorpay.
+        // Confirm payment details directly with Razorpay.
         const payment = await razorpay.payments.fetch(
             razorpay_payment_id
         );
@@ -240,7 +343,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Record verified payment. A PAID attempt can retry order creation.
+        // Mark the payment as PAID.
         if (attempt.status === "CREATED") {
             const updatedAttempt = await PaymentAttempt.findOneAndUpdate(
                 {
@@ -282,15 +385,54 @@ exports.verifyRazorpayPayment = async (req, res) => {
             }
         }
 
-        // Recover safely if an order was created before the attempt
-        // status was updated.
+        // Recover if the order was created but the attempt was not updated.
         let order = await Order.findOne({
             razorpayOrderId: attempt.razorpayOrderId
         });
 
         if (!order) {
-            // Reuse the existing order controller, including its
-            // inventory allocation and transaction logic.
+            /*
+             * Build order items:
+             * - New cart attempts use attempt.items.
+             * - Older Buy Now attempts use product, variantId, quantity.
+             */
+            let orderItems = [];
+
+            if (Array.isArray(attempt.items) && attempt.items.length > 0) {
+                orderItems = attempt.items.map(item => ({
+                    product: item.product,
+                    variant: item.variantId,
+                    quantity: item.quantity
+                }));
+            } else if (
+                attempt.product &&
+                attempt.variantId &&
+                Number(attempt.quantity) >= 1
+            ) {
+                orderItems = [{
+                    product: attempt.product,
+                    variant: attempt.variantId,
+                    quantity: attempt.quantity
+                }];
+            }
+
+            if (!orderItems.length) {
+                console.error(
+                    "Payment attempt has no valid order items:",
+                    attempt._id
+                );
+
+                return res.status(500).json({
+                    success: false,
+                    message: "Payment verified, but order items could not be recovered",
+                    data: {
+                        paymentAttemptId: attempt._id,
+                        status: "PAID"
+                    }
+                });
+            }
+
+            // Reuse existing createOrder, stock allocation and transaction logic.
             let orderResponse;
             let responseStatus = 200;
 
@@ -300,11 +442,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
                     orderSource: "ONLINE",
                     user: userId,
                     address: attempt.address,
-                    items: [{
-                        product: attempt.product,
-                        variant: attempt.variantId,
-                        quantity: attempt.quantity
-                    }],
+                    items: orderItems,
                     paymentMethod: "ONLINE",
                     razorpayOrderId: attempt.razorpayOrderId,
                     razorpayPaymentId: razorpay_payment_id
@@ -325,10 +463,11 @@ exports.verifyRazorpayPayment = async (req, res) => {
             await exports.createOrder(internalReq, internalRes);
 
             if (
+                responseStatus >= 400 ||
                 !orderResponse?.success ||
                 !orderResponse?.data?._id
             ) {
-                // A concurrent verification may have created the order.
+                // A concurrent verification might already have created it.
                 order = await Order.findOne({
                     razorpayOrderId: attempt.razorpayOrderId
                 });
@@ -351,11 +490,12 @@ exports.verifyRazorpayPayment = async (req, res) => {
                     });
                 }
             } else {
+                // createOrder returns the order document in its response.
                 order = orderResponse.data;
             }
         }
 
-        // Persist the final order reference on the payment attempt.
+        // Save the final order reference on the payment attempt.
         const completedAttempt = await PaymentAttempt.findOneAndUpdate(
             {
                 _id: attempt._id,
@@ -378,8 +518,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
             if (latest?.status !== "ORDER_CREATED") {
                 return res.status(500).json({
                     success: false,
-                    message:
-                        "Order exists, but payment attempt update is pending",
+                    message: "Order exists, but payment attempt update is pending",
                     data: {
                         orderId: order._id,
                         status: latest?.status
@@ -401,7 +540,10 @@ exports.verifyRazorpayPayment = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Razorpay Verification / Order Creation Error:", error);
+        console.error(
+            "Razorpay Verification / Order Creation Error:",
+            error
+        );
 
         return res.status(500).json({
             success: false,
@@ -409,6 +551,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
         });
     }
 };
+
 
 // ======================================================
 // CREATE ORDER
