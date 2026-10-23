@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const SupplierPurchase = require("../models/supplier-purchase");
 const Product = require("../models/product");
@@ -561,567 +562,796 @@ exports.getPurchaseItemsByVariant = async (
 // =====================================================
 // UPDATE SUPPLIER PURCHASE ITEM
 // =====================================================
-
-exports.updateSupplierPurchaseItem = async (
-    req,
-    res
-) => {
+exports.updateSupplierPurchaseItem = async (req, res) => {
+    const session = await mongoose.startSession();
 
     try {
+        let responseData = null;
 
-        const { id } =
-            req.params;
+        await session.withTransaction(async () => {
+            const { id } = req.params;
 
+            const {
+                purchase,
+                product,
+                variantId,
+                quantity,
+                purchasePrice,
+                supplierProductCode,
+                batchNumber,
+                discount,
+                tax,
+                totalAmount,
+                notes
+            } = req.body;
 
-        // ==========================================
-        // REQUEST BODY
-        // ==========================================
+            // 1. Find Supplier Purchase Item
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                throw new Error("Invalid supplier purchase item ID");
+            }
 
-        const {
-            purchase,              // ✅ ADDED
-            product,
-            variantId,
-            quantity,
-            purchasePrice,
-            supplierProductCode,
-            batchNumber,
-            discount,
-            tax,
-            totalAmount,
-            notes
-        } = req.body;
+            const item = await SupplierPurchaseItem.findById(id)
+                .session(session);
 
+            if (!item) {
+                throw new Error("Supplier purchase item not found");
+            }
 
-        // ==========================================
-        // FIND ITEM
-        // ==========================================
+            // 2. Resolve final IDs
+            const finalPurchase = purchase ?? item.purchase;
+            const finalProduct = product ?? item.product;
+            const finalVariantId = variantId ?? item.variantId;
 
-        const item =
-            await SupplierPurchaseItem.findById(id);
-
-
-        if (!item) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Supplier purchase item not found"
-
-            });
-
-        }
-
-
-        // ==========================================
-        // SUPPLIER PURCHASE UPDATE
-        // ==========================================
-
-        if (purchase !== undefined) {
-
-            const purchaseExists =
-                await SupplierPurchase.findById(
-                    purchase
+            if (
+                !mongoose.Types.ObjectId.isValid(finalPurchase) ||
+                !mongoose.Types.ObjectId.isValid(finalProduct) ||
+                !mongoose.Types.ObjectId.isValid(finalVariantId)
+            ) {
+                throw new Error(
+                    "Invalid purchase, product, or variant ID"
                 );
+            }
 
+            // 3. Validate Supplier Purchase
+            const purchaseExists = await SupplierPurchase.findById(
+                finalPurchase
+            ).session(session);
 
             if (!purchaseExists) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Supplier purchase not found"
-
-                });
-
+                throw new Error("Supplier purchase not found");
             }
 
+            // 4. Find Product using product ID
+            const productDoc = await Product.findById(
+                finalProduct
+            ).session(session);
 
-            // ✅ Update Supplier Purchase
-            item.purchase =
-                purchase;
+            if (!productDoc) {
+                throw new Error("Product not found");
+            }
 
-        }
+            // 5. Find exact variant using Product.variants._id
+            const selectedVariant = productDoc.variants.id(
+                finalVariantId
+            );
 
-
-        // ==========================================
-        // PRODUCT UPDATE
-        // ==========================================
-
-        if (product !== undefined) {
-
-            const productExists =
-                await Product.findById(
-                    product
+            if (!selectedVariant) {
+                throw new Error(
+                    "Selected variant not found in this product"
                 );
-
-
-            if (!productExists) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Product not found"
-
-                });
-
             }
 
+            // 6. Validate quantity
+            const oldQuantity = Number(item.quantity || 0);
+            const oldAvailableQuantity = Number(
+                item.availableQuantity || 0
+            );
 
-            // If variant is also being updated,
-            // validate it against new product
-
-            const selectedVariantId =
-                variantId !== undefined
-                    ? variantId
-                    : item.variantId;
-
-
-            const variantExists =
-                productExists.variants?.some(
-                    variant =>
-                        String(variant._id) ===
-                        String(selectedVariantId)
-                );
-
-
-            if (!variantExists) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Variant not found in selected product"
-
-                });
-
-            }
-
-
-            item.product =
-                product;
-
-        }
-
-
-        // ==========================================
-        // VARIANT UPDATE
-        // ==========================================
-
-        if (variantId !== undefined) {
-
-            const productId =
-                product !== undefined
-                    ? product
-                    : item.product;
-
-
-            const productExists =
-                await Product.findById(
-                    productId
-                );
-
-
-            if (!productExists) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Product not found"
-
-                });
-
-            }
-
-
-            const variantExists =
-                productExists.variants?.some(
-                    variant =>
-                        String(variant._id) ===
-                        String(variantId)
-                );
-
-
-            if (!variantExists) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Variant not found in selected product"
-
-                });
-
-            }
-
-
-            item.variantId =
-                variantId;
-
-        }
-
-
-        // ==========================================
-        // QUANTITY UPDATE
-        // ==========================================
-
-        if (quantity !== undefined) {
-
-            const newQuantity =
-                Number(quantity);
-
+            const finalQuantity =
+                quantity !== undefined
+                    ? Number(quantity)
+                    : oldQuantity;
 
             if (
-                !Number.isFinite(newQuantity) ||
-                newQuantity < 1
+                !Number.isFinite(finalQuantity) ||
+                finalQuantity < 1
             ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Quantity must be at least 1"
-
-                });
-
+                throw new Error("Quantity must be at least 1");
             }
 
+            // Preserve quantity already sold
+            const soldQuantity = Math.max(
+                oldQuantity - oldAvailableQuantity,
+                0
+            );
 
-            // --------------------------------------
-            // Calculate already sold quantity
-            // --------------------------------------
-
-            const currentQuantity =
-                Number(item.quantity) || 0;
-
-            const currentAvailable =
-                Number(item.availableQuantity) || 0;
-
-
-            const soldQuantity =
-                Math.max(
-                    currentQuantity -
-                    currentAvailable,
-                    0
+            if (finalQuantity < soldQuantity) {
+                throw new Error(
+                    `Quantity cannot be less than sold quantity (${soldQuantity})`
                 );
-
-
-            // --------------------------------------
-            // New quantity cannot be less than
-            // already sold quantity
-            // --------------------------------------
-
-            if (
-                newQuantity <
-                soldQuantity
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        `Quantity cannot be less than sold quantity (${soldQuantity})`
-
-                });
-
             }
 
+            const finalAvailableQuantity =
+                finalQuantity - soldQuantity;
 
-            // --------------------------------------
-            // Update quantity
-            // --------------------------------------
+            // 7. Update Supplier Purchase Item fields
+            item.purchase = finalPurchase;
+            item.product = finalProduct;
+            item.variantId = finalVariantId;
+            item.quantity = finalQuantity;
+            item.availableQuantity = finalAvailableQuantity;
 
-            item.quantity =
-                newQuantity;
+            // 8. Purchase price
+            if (purchasePrice !== undefined) {
+                const value = Number(purchasePrice);
 
-
-            // --------------------------------------
-            // Recalculate available quantity
-            // --------------------------------------
-
-            item.availableQuantity =
-                newQuantity -
-                soldQuantity;
-
-        }
-
-
-        // ==========================================
-        // PURCHASE PRICE
-        // ==========================================
-
-        if (purchasePrice !== undefined) {
-
-            const newPurchasePrice =
-                Number(purchasePrice);
-
-
-            if (
-                !Number.isFinite(
-                    newPurchasePrice
-                ) ||
-                newPurchasePrice < 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
+                if (!Number.isFinite(value) || value < 0) {
+                    throw new Error(
                         "Valid purchase price is required"
-
-                });
-
-            }
-
-
-            item.purchasePrice =
-                newPurchasePrice;
-
-        }
-
-
-        // ==========================================
-        // SUPPLIER PRODUCT CODE
-        // ==========================================
-
-        if (
-            supplierProductCode !== undefined
-        ) {
-
-            item.supplierProductCode =
-                supplierProductCode;
-
-        }
-
-
-        // ==========================================
-        // BATCH NUMBER
-        // ==========================================
-
-        if (
-            batchNumber !== undefined
-        ) {
-
-            item.batchNumber =
-                batchNumber;
-
-        }
-
-
-        // ==========================================
-        // DISCOUNT
-        // ==========================================
-
-        if (
-            discount !== undefined
-        ) {
-
-            const newDiscount =
-                Number(discount);
-
-
-            if (
-                !Number.isFinite(newDiscount) ||
-                newDiscount < 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Discount must be 0 or greater"
-
-                });
-
-            }
-
-
-            item.discount =
-                newDiscount;
-
-        }
-
-
-        // ==========================================
-        // TAX
-        // ==========================================
-
-        if (
-            tax !== undefined
-        ) {
-
-            const newTax =
-                Number(tax);
-
-
-            if (
-                !Number.isFinite(newTax) ||
-                newTax < 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Tax must be 0 or greater"
-
-                });
-
-            }
-
-
-            item.tax =
-                newTax;
-
-        }
-
-
-        // ==========================================
-        // TOTAL AMOUNT
-        // ==========================================
-
-        if (
-            totalAmount !== undefined
-        ) {
-
-            const newTotalAmount =
-                Number(totalAmount);
-
-
-            if (
-                !Number.isFinite(
-                    newTotalAmount
-                ) ||
-                newTotalAmount < 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Total amount must be 0 or greater"
-
-                });
-
-            }
-
-
-            item.totalAmount =
-                newTotalAmount;
-
-        }
-
-
-        // ==========================================
-        // NOTES
-        // ==========================================
-
-        if (
-            notes !== undefined
-        ) {
-
-            item.notes =
-                notes?.trim() || "";
-
-        }
-
-
-        // ==========================================
-        // SAVE
-        // ==========================================
-
-        console.log(
-            "ITEM BEFORE SAVE:",
-            item.toObject()
-        );
-
-
-        await item.save();
-
-
-        console.log(
-            "ITEM AFTER SAVE:",
-            item.toObject()
-        );
-
-
-        // ==========================================
-        // POPULATE
-        // ==========================================
-
-        await item.populate([
-
-            {
-                path: "purchase",
-
-                populate: {
-                    path: "supplier"
+                    );
                 }
 
-            },
-
-            {
-                path: "product"
-
+                item.purchasePrice = value;
             }
 
-        ]);
+            // 9. Supplier product code
+            if (supplierProductCode !== undefined) {
+                item.supplierProductCode = supplierProductCode;
+            }
 
+            // 10. Batch number
+            if (batchNumber !== undefined) {
+                item.batchNumber = batchNumber;
+            }
 
-        // ==========================================
-        // SUCCESS
-        // ==========================================
+            // 11. Discount
+            if (discount !== undefined) {
+                const value = Number(discount);
 
-        return res.status(200).json({
+                if (!Number.isFinite(value) || value < 0) {
+                    throw new Error(
+                        "Discount must be 0 or greater"
+                    );
+                }
 
-            success: true,
+                item.discount = value;
+            }
 
-            message:
-                "Supplier purchase item updated successfully",
+            // 12. Tax
+            if (tax !== undefined) {
+                const value = Number(tax);
 
-            data:
-                item
+                if (!Number.isFinite(value) || value < 0) {
+                    throw new Error("Tax must be 0 or greater");
+                }
 
+                item.tax = value;
+            }
+
+            // 13. Total amount
+            if (totalAmount !== undefined) {
+                const value = Number(totalAmount);
+
+                if (!Number.isFinite(value) || value < 0) {
+                    throw new Error(
+                        "Total amount must be 0 or greater"
+                    );
+                }
+
+                item.totalAmount = value;
+            }
+
+            // 14. Notes
+            if (notes !== undefined) {
+                item.notes = notes?.trim() || "";
+            }
+
+            // 15. Update the matched Product variant stock
+            // Product ID + Variant ID identifies the exact variant.
+            selectedVariant.stock = finalAvailableQuantity;
+
+            // Save both changes in the same transaction
+            await productDoc.save({ session });
+            await item.save({ session });
+
+            // 16. Return updated item
+            responseData = await SupplierPurchaseItem.findById(
+                item._id
+            )
+                .populate({
+                    path: "purchase",
+                    populate: {
+                        path: "supplier"
+                    }
+                })
+                .populate("product")
+                .session(session);
         });
 
-    }
+        return res.status(200).json({
+            success: true,
+            message:
+                "Supplier purchase item and product variant updated successfully",
+            data: responseData
+        });
 
-
-    catch (error) {
-
-        console.log(
+    } catch (error) {
+        console.error(
             "Update Supplier Purchase Item Error:",
             error
         );
 
-
-        return res.status(500).json({
-
+        return res.status(400).json({
             success: false,
-
             message:
-                error.message
-
+                error.message ||
+                "Failed to update supplier purchase item"
         });
 
+    } finally {
+        await session.endSession();
     }
-
 };
+// exports.updateSupplierPurchaseItem = async (
+//     req,
+//     res
+// ) => {
+
+//     try {
+
+//         const { id } =
+//             req.params;
+
+
+//         // ==========================================
+//         // REQUEST BODY
+//         // ==========================================
+
+//         const {
+//             purchase,              // ✅ ADDED
+//             product,
+//             variantId,
+//             quantity,
+//             purchasePrice,
+//             supplierProductCode,
+//             batchNumber,
+//             discount,
+//             tax,
+//             totalAmount,
+//             notes
+//         } = req.body;
+
+
+//         // ==========================================
+//         // FIND ITEM
+//         // ==========================================
+
+//         const item =
+//             await SupplierPurchaseItem.findById(id);
+
+
+//         if (!item) {
+
+//             return res.status(404).json({
+
+//                 success: false,
+
+//                 message:
+//                     "Supplier purchase item not found"
+
+//             });
+
+//         }
+
+
+//         // ==========================================
+//         // SUPPLIER PURCHASE UPDATE
+//         // ==========================================
+
+//         if (purchase !== undefined) {
+
+//             const purchaseExists =
+//                 await SupplierPurchase.findById(
+//                     purchase
+//                 );
+
+
+//             if (!purchaseExists) {
+
+//                 return res.status(404).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Supplier purchase not found"
+
+//                 });
+
+//             }
+
+
+//             // ✅ Update Supplier Purchase
+//             item.purchase =
+//                 purchase;
+
+//         }
+
+
+//         // ==========================================
+//         // PRODUCT UPDATE
+//         // ==========================================
+
+//         if (product !== undefined) {
+
+//             const productExists =
+//                 await Product.findById(
+//                     product
+//                 );
+
+
+//             if (!productExists) {
+
+//                 return res.status(404).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Product not found"
+
+//                 });
+
+//             }
+
+
+//             // If variant is also being updated,
+//             // validate it against new product
+
+//             const selectedVariantId =
+//                 variantId !== undefined
+//                     ? variantId
+//                     : item.variantId;
+
+
+//             const variantExists =
+//                 productExists.variants?.some(
+//                     variant =>
+//                         String(variant._id) ===
+//                         String(selectedVariantId)
+//                 );
+
+
+//             if (!variantExists) {
+
+//                 return res.status(404).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Variant not found in selected product"
+
+//                 });
+
+//             }
+
+
+//             item.product =
+//                 product;
+
+//         }
+
+
+//         // ==========================================
+//         // VARIANT UPDATE
+//         // ==========================================
+
+//         if (variantId !== undefined) {
+
+//             const productId =
+//                 product !== undefined
+//                     ? product
+//                     : item.product;
+
+
+//             const productExists =
+//                 await Product.findById(
+//                     productId
+//                 );
+
+
+//             if (!productExists) {
+
+//                 return res.status(404).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Product not found"
+
+//                 });
+
+//             }
+
+
+//             const variantExists =
+//                 productExists.variants?.some(
+//                     variant =>
+//                         String(variant._id) ===
+//                         String(variantId)
+//                 );
+
+
+//             if (!variantExists) {
+
+//                 return res.status(404).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Variant not found in selected product"
+
+//                 });
+
+//             }
+
+
+//             item.variantId =
+//                 variantId;
+
+//         }
+
+
+//         // ==========================================
+//         // QUANTITY UPDATE
+//         // ==========================================
+
+//         if (quantity !== undefined) {
+
+//             const newQuantity =
+//                 Number(quantity);
+
+
+//             if (
+//                 !Number.isFinite(newQuantity) ||
+//                 newQuantity < 1
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Quantity must be at least 1"
+
+//                 });
+
+//             }
+
+
+//             // --------------------------------------
+//             // Calculate already sold quantity
+//             // --------------------------------------
+
+//             const currentQuantity =
+//                 Number(item.quantity) || 0;
+
+//             const currentAvailable =
+//                 Number(item.availableQuantity) || 0;
+
+
+//             const soldQuantity =
+//                 Math.max(
+//                     currentQuantity -
+//                     currentAvailable,
+//                     0
+//                 );
+
+
+//             // --------------------------------------
+//             // New quantity cannot be less than
+//             // already sold quantity
+//             // --------------------------------------
+
+//             if (
+//                 newQuantity <
+//                 soldQuantity
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         `Quantity cannot be less than sold quantity (${soldQuantity})`
+
+//                 });
+
+//             }
+
+
+//             // --------------------------------------
+//             // Update quantity
+//             // --------------------------------------
+
+//             item.quantity =
+//                 newQuantity;
+
+
+//             // --------------------------------------
+//             // Recalculate available quantity
+//             // --------------------------------------
+
+//             item.availableQuantity =
+//                 newQuantity -
+//                 soldQuantity;
+
+//         }
+
+
+//         // ==========================================
+//         // PURCHASE PRICE
+//         // ==========================================
+
+//         if (purchasePrice !== undefined) {
+
+//             const newPurchasePrice =
+//                 Number(purchasePrice);
+
+
+//             if (
+//                 !Number.isFinite(
+//                     newPurchasePrice
+//                 ) ||
+//                 newPurchasePrice < 0
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Valid purchase price is required"
+
+//                 });
+
+//             }
+
+
+//             item.purchasePrice =
+//                 newPurchasePrice;
+
+//         }
+
+
+//         // ==========================================
+//         // SUPPLIER PRODUCT CODE
+//         // ==========================================
+
+//         if (
+//             supplierProductCode !== undefined
+//         ) {
+
+//             item.supplierProductCode =
+//                 supplierProductCode;
+
+//         }
+
+
+//         // ==========================================
+//         // BATCH NUMBER
+//         // ==========================================
+
+//         if (
+//             batchNumber !== undefined
+//         ) {
+
+//             item.batchNumber =
+//                 batchNumber;
+
+//         }
+
+
+//         // ==========================================
+//         // DISCOUNT
+//         // ==========================================
+
+//         if (
+//             discount !== undefined
+//         ) {
+
+//             const newDiscount =
+//                 Number(discount);
+
+
+//             if (
+//                 !Number.isFinite(newDiscount) ||
+//                 newDiscount < 0
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Discount must be 0 or greater"
+
+//                 });
+
+//             }
+
+
+//             item.discount =
+//                 newDiscount;
+
+//         }
+
+
+//         // ==========================================
+//         // TAX
+//         // ==========================================
+
+//         if (
+//             tax !== undefined
+//         ) {
+
+//             const newTax =
+//                 Number(tax);
+
+
+//             if (
+//                 !Number.isFinite(newTax) ||
+//                 newTax < 0
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Tax must be 0 or greater"
+
+//                 });
+
+//             }
+
+
+//             item.tax =
+//                 newTax;
+
+//         }
+
+
+//         // ==========================================
+//         // TOTAL AMOUNT
+//         // ==========================================
+
+//         if (
+//             totalAmount !== undefined
+//         ) {
+
+//             const newTotalAmount =
+//                 Number(totalAmount);
+
+
+//             if (
+//                 !Number.isFinite(
+//                     newTotalAmount
+//                 ) ||
+//                 newTotalAmount < 0
+//             ) {
+
+//                 return res.status(400).json({
+
+//                     success: false,
+
+//                     message:
+//                         "Total amount must be 0 or greater"
+
+//                 });
+
+//             }
+
+
+//             item.totalAmount =
+//                 newTotalAmount;
+
+//         }
+
+
+//         // ==========================================
+//         // NOTES
+//         // ==========================================
+
+//         if (
+//             notes !== undefined
+//         ) {
+
+//             item.notes =
+//                 notes?.trim() || "";
+
+//         }
+
+
+//         // ==========================================
+//         // SAVE
+//         // ==========================================
+
+//         console.log(
+//             "ITEM BEFORE SAVE:",
+//             item.toObject()
+//         );
+
+
+//         await item.save();
+
+
+//         console.log(
+//             "ITEM AFTER SAVE:",
+//             item.toObject()
+//         );
+
+
+//         // ==========================================
+//         // POPULATE
+//         // ==========================================
+
+//         await item.populate([
+
+//             {
+//                 path: "purchase",
+
+//                 populate: {
+//                     path: "supplier"
+//                 }
+
+//             },
+
+//             {
+//                 path: "product"
+
+//             }
+
+//         ]);
+
+
+//         // ==========================================
+//         // SUCCESS
+//         // ==========================================
+
+//         return res.status(200).json({
+
+//             success: true,
+
+//             message:
+//                 "Supplier purchase item updated successfully",
+
+//             data:
+//                 item
+
+//         });
+
+//     }
+
+
+//     catch (error) {
+
+//         console.log(
+//             "Update Supplier Purchase Item Error:",
+//             error
+//         );
+
+
+//         return res.status(500).json({
+
+//             success: false,
+
+//             message:
+//                 error.message
+
+//         });
+
+//     }
+
+// };
 
 // =====================================================
 // DELETE SUPPLIER PURCHASE ITEM

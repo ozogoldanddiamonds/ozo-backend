@@ -9,7 +9,6 @@ const calculateVariantPrice =
 CREATE PRODUCT
 */
 exports.createProduct = async (req, res) => {
-
   try {
     // =========================
     // REQUIRED VALIDATIONS
@@ -36,6 +35,14 @@ exports.createProduct = async (req, res) => {
       });
     }
 
+    // Schema lo subSubCategory required kabatti
+    if (!req.body.subSubCategory) {
+      return res.status(400).json({
+        success: false,
+        message: "Sub Sub Category is required"
+      });
+    }
+
     if (!req.body.productType) {
       return res.status(400).json({
         success: false,
@@ -50,155 +57,96 @@ exports.createProduct = async (req, res) => {
       });
     }
 
-    let imageUrls = [];
-    let certificateUrl = "";
-    let videoUrl = "";
-
     // =========================
-    // PRODUCT IMAGES UPLOAD
+    // PARSE JSON SAFELY
     // =========================
 
-    if (req.files?.images?.length > 0) {
-
-      for (const file of req.files.images) {
-
-        const result = await new Promise(
-          (resolve, reject) => {
-
-            cloudinary.uploader.upload_stream(
-              {
-                folder: "products"
-              },
-              (error, result) => {
-
-                if (error) reject(error);
-                else resolve(result);
-
-              }
-            ).end(file.buffer);
-
-          }
-        );
-
-        imageUrls.push(result.secure_url);
+    const parseJsonField = (value, defaultValue, fieldName) => {
+      if (value === undefined || value === null || value === "") {
+        return defaultValue;
       }
-    }
-    if (imageUrls.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "At least one product image is required"
-      });
-    }
 
-    // =========================
-    // CERTIFICATE UPLOAD
-    // =========================
-
-    if (req.files?.certificate?.length > 0) {
-
-      const certFile =
-        req.files.certificate[0];
-
-      const certResult =
-        await new Promise(
-          (resolve, reject) => {
-
-            cloudinary.uploader.upload_stream(
-              {
-                folder: "certificates",
-                resource_type: "auto"
-              },
-              (error, result) => {
-
-                if (error) reject(error);
-                else resolve(result);
-
-              }
-            ).end(certFile.buffer);
-
-          }
+      try {
+        return typeof value === "string"
+          ? JSON.parse(value)
+          : value;
+      } catch {
+        const error = new Error(
+          `Invalid JSON format for ${fieldName}`
         );
+        error.statusCode = 400;
+        throw error;
+      }
+    };
 
-      certificateUrl =
-        certResult.secure_url;
-    }
+    const variants = parseJsonField(
+      req.body.variants,
+      [],
+      "variants"
+    );
 
-    // =========================
-    // VIDEO UPLOAD
-    // =========================
+    const tags = parseJsonField(
+      req.body.tags,
+      [],
+      "tags"
+    );
 
-    if (req.files?.video?.length > 0) {
+    const metaKeywords = parseJsonField(
+      req.body.metaKeywords,
+      [],
+      "metaKeywords"
+    );
 
-      const videoFile =
-        req.files.video[0];
-
-      const videoResult =
-        await new Promise(
-          (resolve, reject) => {
-
-            cloudinary.uploader.upload_stream(
-              {
-                folder: "products/videos",
-                resource_type: "video"
-              },
-              (error, result) => {
-
-                if (error) reject(error);
-                else resolve(result);
-
-              }
-            ).end(videoFile.buffer);
-
-          }
-        );
-
-      videoUrl =
-        videoResult.secure_url;
-    }
-
-    // =========================
-    // PARSE VARIANTS
-    // =========================
-
-    let variants =
-      req.body.variants
-        ? JSON.parse(req.body.variants)
-        : [];
-
-    if (!variants.length) {
+    if (!Array.isArray(variants) || variants.length === 0) {
       return res.status(400).json({
         success: false,
         message: "At least one variant is required"
       });
     }
-    // =========================
-    // AUTO GENERATE SKU
-    // =========================
-    for (const variant of variants) {
-      if (!variant.sku || !variant.sku.trim()) {
 
+    if (!Array.isArray(tags) || !Array.isArray(metaKeywords)) {
+      return res.status(400).json({
+        success: false,
+        message: "Tags and metaKeywords must be arrays"
+      });
+    }
+
+    // =========================
+    // VALIDATE VARIANTS
+    // =========================
+
+    const generatedSkus = new Set();
+
+    for (const variant of variants) {
+      if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+        return res.status(400).json({
+          success: false,
+          message: "Each variant must be a valid object"
+        });
+      }
+
+      // Auto-generate SKU if missing
+      if (
+        typeof variant.sku !== "string" ||
+        !variant.sku.trim()
+      ) {
         variant.sku =
           `SKU-${Date.now()}-${Math.floor(
             1000 + Math.random() * 9000
           )}`;
-
+      } else {
+        variant.sku = variant.sku.trim();
       }
-      // if (!variant.sku?.trim()) {
-      //   return res.status(400).json({
-      //     success: false,
-      //     message: "SKU is required"
-      //   });
-      // }
 
-      if (
-        variant.stock === undefined ||
-        variant.stock === null
-      ) {
-        return res.status(400).json({
+      // Duplicate SKU within the same request
+      if (generatedSkus.has(variant.sku)) {
+        return res.status(409).json({
           success: false,
-          message: `Stock is required for SKU '${variant.sku}'`
+          message: `Duplicate SKU '${variant.sku}' in variants`
         });
       }
+
+      generatedSkus.add(variant.sku);
 
       if (!variant.metalType) {
         return res.status(400).json({
@@ -214,247 +162,309 @@ exports.createProduct = async (req, res) => {
         });
       }
 
-      if (!variant.grossWeight) {
+      if (
+        variant.grossWeight === undefined ||
+        variant.grossWeight === null ||
+        variant.grossWeight === "" ||
+        !Number.isFinite(Number(variant.grossWeight)) ||
+        Number(variant.grossWeight) <= 0
+      ) {
         return res.status(400).json({
           success: false,
-          message: `Gross weight is required for SKU '${variant.sku}'`
+          message: `Valid gross weight is required for SKU '${variant.sku}'`
         });
       }
 
-      if (!variant.netWeight) {
+      if (
+        variant.netWeight === undefined ||
+        variant.netWeight === null ||
+        variant.netWeight === "" ||
+        !Number.isFinite(Number(variant.netWeight)) ||
+        Number(variant.netWeight) <= 0
+      ) {
         return res.status(400).json({
           success: false,
-          message: `Net weight is required for SKU '${variant.sku}'`
+          message: `Valid net weight is required for SKU '${variant.sku}'`
         });
       }
+
+      // IMPORTANT:
+      // Ignore stock received from frontend.
+      // Every new variant starts with zero stock.
+      variant.stock = 0;
+
+      // Product creation should not accept a client-supplied
+      // embedded variant ID.
+      delete variant._id;
     }
 
-    // =========================
-    // PARSE TAGS
-    // =========================
-
-    const tags =
-      req.body.tags
-        ? JSON.parse(req.body.tags)
-        : [];
-
-    // =========================
-    // PARSE META KEYWORDS
-    // =========================
-
-    const metaKeywords =
-      req.body.metaKeywords
-        ? JSON.parse(req.body.metaKeywords)
-        : [];
-
-    // =========================
-    // UNIQUE VALIDATIONS
-    // =========================
     // =========================
     // AUTO GENERATE SLUG
     // =========================
 
-    if (!req.body.slug?.trim()) {
-
-      req.body.slug = req.body.name
+    const slug = req.body.slug?.trim()
+      ? req.body.slug.trim()
+      : req.body.name
         .trim()
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
 
-    }
-    // SLUG
+    // =========================
+    // UNIQUE VALIDATIONS
+    // =========================
 
-    if (req.body.slug) {
-      const existingSlug = await Product.findOne({
-        slug: req.body.slug.trim()
+    const existingSlug = await Product.findOne({ slug });
+
+    if (existingSlug) {
+      return res.status(409).json({
+        success: false,
+        message: `Slug '${slug}' already exists`
       });
-
-      if (existingSlug) {
-        return res.status(409).json({
-          success: false,
-          message: `Slug '${req.body.slug}' already exists`
-        });
-      }
     }
 
-    // HALLMARK
+    const hallmarkNumber = req.body.hallmarkNumber?.trim();
 
-    if (req.body.hallmarkNumber) {
-
-      const existingHallmark =
-        await Product.findOne({
-          hallmarkNumber:
-            req.body.hallmarkNumber.trim()
-        });
+    if (hallmarkNumber) {
+      const existingHallmark = await Product.findOne({
+        hallmarkNumber
+      });
 
       if (existingHallmark) {
         return res.status(409).json({
           success: false,
-          message:
-            `Hallmark Number '${req.body.hallmarkNumber}' already exists`
+          message: `Hallmark Number '${hallmarkNumber}' already exists`
         });
       }
     }
 
-    // SKU
-
     for (const variant of variants) {
-
-      const existingSku =
-        await Product.findOne({
-          "variants.sku":
-            variant.sku.trim()
-        });
+      const existingSku = await Product.findOne({
+        "variants.sku": variant.sku
+      });
 
       if (existingSku) {
         return res.status(409).json({
           success: false,
-          message:
-            `SKU '${variant.sku}' already exists`
+          message: `SKU '${variant.sku}' already exists`
         });
       }
     }
 
     // =========================
-    // PRODUCT CREATE
+    // PRODUCT IMAGE UPLOAD
     // =========================
 
-    const product =
-      await Product.create({
+    let imageUrls = [];
+    let certificateUrl = "";
+    let videoUrl = "";
 
-        name:
-          req.body.name,
+    if (req.files?.images?.length > 0) {
+      for (const file of req.files.images) {
+        const result = await new Promise((resolve, reject) => {
+          cloudinary.uploader
+            .upload_stream(
+              { folder: "products" },
+              (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+              }
+            )
+            .end(file.buffer);
+        });
 
-        slug:
-          req.body.slug,
+        imageUrls.push(result.secure_url);
+      }
+    }
 
-        shortDescription:
-          req.body.shortDescription,
+    if (imageUrls.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one product image is required"
+      });
+    }
 
-        description:
-          req.body.description,
+    // =========================
+    // CERTIFICATE UPLOAD
+    // =========================
 
-        category:
-          req.body.category,
+    if (req.files?.certificate?.length > 0) {
+      const certFile = req.files.certificate[0];
 
-        subCategory:
-          req.body.subCategory || null,
-
-        subSubCategory:
-          req.body.subSubCategory || null,
-
-        productType:
-          req.body.productType,
-
-        gender:
-          req.body.gender,
-
-        occasion:
-          req.body.occasion,
-
-        brand:
-          req.body.brand,
-
-        hallmarkCertified:
-          req.body.hallmarkCertified === "true",
-
-        hallmarkNumber:
-          req.body.hallmarkNumber,
-
-        certificationIncluded:
-          req.body.certificationIncluded === "true",
-
-        certificateUrl,
-
-        featured:
-          req.body.featured === "true",
-
-        bestSeller:
-          req.body.bestSeller === "true",
-
-        trending:
-          req.body.trending === "true",
-
-        newArrival:
-          req.body.newArrival === "true",
-
-        variants,
-
-        images:
-          imageUrls,
-
-        video:
-          videoUrl,
-
-        tags,
-
-        seoTitle:
-          req.body.seoTitle,
-
-        seoDescription:
-          req.body.seoDescription,
-
-        metaKeywords,
-
-        isActive:
-          req.body.isActive !== "false"
+      const certResult = await new Promise((resolve, reject) => {
+        cloudinary.uploader
+          .upload_stream(
+            {
+              folder: "certificates",
+              resource_type: "auto"
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          )
+          .end(certFile.buffer);
       });
 
-    res.status(201).json({
+      certificateUrl = certResult.secure_url;
+    }
 
+    // =========================
+    // VIDEO UPLOAD
+    // =========================
+
+    if (req.files?.video?.length > 0) {
+      const videoFile = req.files.video[0];
+
+      const videoResult = await new Promise((resolve, reject) => {
+        cloudinary.uploader
+          .upload_stream(
+            {
+              folder: "products/videos",
+              resource_type: "video"
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          )
+          .end(videoFile.buffer);
+      });
+
+      videoUrl = videoResult.secure_url;
+    }
+
+    // =========================
+    // CREATE PRODUCT
+    // =========================
+
+    const product = await Product.create({
+      name: req.body.name.trim(),
+      slug,
+
+      shortDescription: req.body.shortDescription,
+      description: req.body.description.trim(),
+
+      category: req.body.category,
+      subCategory: req.body.subCategory,
+      subSubCategory: req.body.subSubCategory,
+
+      productType: req.body.productType,
+      gender: req.body.gender,
+      occasion: req.body.occasion,
+      brand: req.body.brand || undefined,
+
+      hallmarkCertified:
+        req.body.hallmarkCertified === undefined
+          ? true
+          : req.body.hallmarkCertified === "true",
+
+      hallmarkNumber: hallmarkNumber || undefined,
+
+      certificationIncluded:
+        req.body.certificationIncluded === undefined
+          ? true
+          : req.body.certificationIncluded === "true",
+
+      certificateUrl,
+
+      featured: req.body.featured === "true",
+      bestSeller: req.body.bestSeller === "true",
+      trending: req.body.trending === "true",
+      newArrival: req.body.newArrival === "true",
+
+      // All variants have stock = 0
+      variants,
+
+      images: imageUrls,
+      video: videoUrl,
+
+      tags,
+      seoTitle: req.body.seoTitle,
+      seoDescription: req.body.seoDescription,
+      metaKeywords,
+
+      isActive: req.body.isActive !== "false"
+    });
+
+    return res.status(201).json({
       success: true,
-
-      message:
-        "Product created successfully",
-
-      data:
-        product
-
+      message: "Product created successfully. Initial variant stock is zero.",
+      data: product
     });
 
   } catch (error) {
-
-    console.error(error);
+    console.error("Create Product Error:", error);
 
     if (error.code === 11000) {
-
-      const field =
-        Object.keys(error.keyValue)[0];
-
-      const value =
-        error.keyValue[field];
+      const field = Object.keys(error.keyValue || {})[0];
 
       return res.status(409).json({
         success: false,
-        message:
-          `${field} '${value}' already exists`
+        message: `${field || "Field"} already exists`
       });
-
     }
 
-    res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
       message:
-        error.message
+        error.statusCode === 400
+          ? error.message
+          : "Failed to create product"
     });
-
   }
-
 };
+
 // exports.createProduct = async (req, res) => {
 
 //   try {
+//     // =========================
+//     // REQUIRED VALIDATIONS
+//     // =========================
+
+//     if (!req.body.name?.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Product name is required"
+//       });
+//     }
+
+//     if (!req.body.category) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Category is required"
+//       });
+//     }
+
+//     if (!req.body.subCategory) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Sub Category is required"
+//       });
+//     }
+
+//     if (!req.body.productType) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Product type is required"
+//       });
+//     }
+
+//     if (!req.body.description?.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Description is required"
+//       });
+//     }
 
 //     let imageUrls = [];
-
 //     let certificateUrl = "";
-
 //     let videoUrl = "";
 
 //     // =========================
 //     // PRODUCT IMAGES UPLOAD
 //     // =========================
+
 //     if (req.files?.images?.length > 0) {
 
 //       for (const file of req.files.images) {
@@ -463,38 +473,35 @@ exports.createProduct = async (req, res) => {
 //           (resolve, reject) => {
 
 //             cloudinary.uploader.upload_stream(
-
 //               {
 //                 folder: "products"
 //               },
-
 //               (error, result) => {
 
-//                 if (error)
-//                   reject(error);
-
-//                 else
-//                   resolve(result);
+//                 if (error) reject(error);
+//                 else resolve(result);
 
 //               }
-
 //             ).end(file.buffer);
 
 //           }
 //         );
 
 //         imageUrls.push(result.secure_url);
-
 //       }
-
+//     }
+//     if (imageUrls.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "At least one product image is required"
+//       });
 //     }
 
 //     // =========================
 //     // CERTIFICATE UPLOAD
 //     // =========================
-//     if (
-//       req.files?.certificate?.length > 0
-//     ) {
+
+//     if (req.files?.certificate?.length > 0) {
 
 //       const certFile =
 //         req.files.certificate[0];
@@ -504,22 +511,16 @@ exports.createProduct = async (req, res) => {
 //           (resolve, reject) => {
 
 //             cloudinary.uploader.upload_stream(
-
 //               {
 //                 folder: "certificates",
 //                 resource_type: "auto"
 //               },
-
 //               (error, result) => {
 
-//                 if (error)
-//                   reject(error);
-
-//                 else
-//                   resolve(result);
+//                 if (error) reject(error);
+//                 else resolve(result);
 
 //               }
-
 //             ).end(certFile.buffer);
 
 //           }
@@ -527,59 +528,284 @@ exports.createProduct = async (req, res) => {
 
 //       certificateUrl =
 //         certResult.secure_url;
-
 //     }
 
 //     // =========================
-//     // VARIANTS PARSE
+//     // VIDEO UPLOAD
 //     // =========================
-//     let variants = req.body.variants
-//       ? JSON.parse(req.body.variants)
-//       : [];
+
+//     if (req.files?.video?.length > 0) {
+
+//       const videoFile =
+//         req.files.video[0];
+
+//       const videoResult =
+//         await new Promise(
+//           (resolve, reject) => {
+
+//             cloudinary.uploader.upload_stream(
+//               {
+//                 folder: "products/videos",
+//                 resource_type: "video"
+//               },
+//               (error, result) => {
+
+//                 if (error) reject(error);
+//                 else resolve(result);
+
+//               }
+//             ).end(videoFile.buffer);
+
+//           }
+//         );
+
+//       videoUrl =
+//         videoResult.secure_url;
+//     }
 
 //     // =========================
-//     // CERTIFICATE URL ADD
+//     // PARSE VARIANTS
 //     // =========================
-//     variants = variants.map(
-//       (variant) => ({
 
-//         ...variant,
+//     let variants =
+//       req.body.variants
+//         ? JSON.parse(req.body.variants)
+//         : [];
 
-//         diamonds:
-//           variant.diamonds?.map(
-//             (diamond) => ({
+//     if (!variants.length) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "At least one variant is required"
+//       });
+//     }
+//     // =========================
+//     // AUTO GENERATE SKU
+//     // =========================
+//     for (const variant of variants) {
+//       if (!variant.sku || !variant.sku.trim()) {
 
-//               ...diamond,
+//         variant.sku =
+//           `SKU-${Date.now()}-${Math.floor(
+//             1000 + Math.random() * 9000
+//           )}`;
 
-//               certificateUrl:
-//                 certificateUrl
+//       }
+//       // if (!variant.sku?.trim()) {
+//       //   return res.status(400).json({
+//       //     success: false,
+//       //     message: "SKU is required"
+//       //   });
+//       // }
 
-//             })
-//           ) || []
+//       if (
+//         variant.stock === undefined ||
+//         variant.stock === null
+//       ) {
+//         return res.status(400).json({
+//           success: false,
+//           message: `Stock is required for SKU '${variant.sku}'`
+//         });
+//       }
 
-//       })
-//     );
+//       if (!variant.metalType) {
+//         return res.status(400).json({
+//           success: false,
+//           message: `Metal type is required for SKU '${variant.sku}'`
+//         });
+//       }
+
+//       if (!variant.metalPurity) {
+//         return res.status(400).json({
+//           success: false,
+//           message: `Metal purity is required for SKU '${variant.sku}'`
+//         });
+//       }
+
+//       if (!variant.grossWeight) {
+//         return res.status(400).json({
+//           success: false,
+//           message: `Gross weight is required for SKU '${variant.sku}'`
+//         });
+//       }
+
+//       if (!variant.netWeight) {
+//         return res.status(400).json({
+//           success: false,
+//           message: `Net weight is required for SKU '${variant.sku}'`
+//         });
+//       }
+//     }
 
 //     // =========================
-//     // CREATE PRODUCT
+//     // PARSE TAGS
 //     // =========================
+
+//     const tags =
+//       req.body.tags
+//         ? JSON.parse(req.body.tags)
+//         : [];
+
+//     // =========================
+//     // PARSE META KEYWORDS
+//     // =========================
+
+//     const metaKeywords =
+//       req.body.metaKeywords
+//         ? JSON.parse(req.body.metaKeywords)
+//         : [];
+
+//     // =========================
+//     // UNIQUE VALIDATIONS
+//     // =========================
+//     // =========================
+//     // AUTO GENERATE SLUG
+//     // =========================
+
+//     if (!req.body.slug?.trim()) {
+
+//       req.body.slug = req.body.name
+//         .trim()
+//         .toLowerCase()
+//         .replace(/[^a-z0-9]+/g, '-')
+//         .replace(/^-+|-+$/g, '');
+
+//     }
+//     // SLUG
+
+//     if (req.body.slug) {
+//       const existingSlug = await Product.findOne({
+//         slug: req.body.slug.trim()
+//       });
+
+//       if (existingSlug) {
+//         return res.status(409).json({
+//           success: false,
+//           message: `Slug '${req.body.slug}' already exists`
+//         });
+//       }
+//     }
+
+//     // HALLMARK
+
+//     if (req.body.hallmarkNumber) {
+
+//       const existingHallmark =
+//         await Product.findOne({
+//           hallmarkNumber:
+//             req.body.hallmarkNumber.trim()
+//         });
+
+//       if (existingHallmark) {
+//         return res.status(409).json({
+//           success: false,
+//           message:
+//             `Hallmark Number '${req.body.hallmarkNumber}' already exists`
+//         });
+//       }
+//     }
+
+//     // SKU
+
+//     for (const variant of variants) {
+
+//       const existingSku =
+//         await Product.findOne({
+//           "variants.sku":
+//             variant.sku.trim()
+//         });
+
+//       if (existingSku) {
+//         return res.status(409).json({
+//           success: false,
+//           message:
+//             `SKU '${variant.sku}' already exists`
+//         });
+//       }
+//     }
+
+//     // =========================
+//     // PRODUCT CREATE
+//     // =========================
+
 //     const product =
 //       await Product.create({
 
-//         ...req.body,
+//         name:
+//           req.body.name,
+
+//         slug:
+//           req.body.slug,
+
+//         shortDescription:
+//           req.body.shortDescription,
+
+//         description:
+//           req.body.description,
+
+//         category:
+//           req.body.category,
+
+//         subCategory:
+//           req.body.subCategory || null,
+
+//         subSubCategory:
+//           req.body.subSubCategory || null,
+
+//         productType:
+//           req.body.productType,
+
+//         gender:
+//           req.body.gender,
+
+//         occasion:
+//           req.body.occasion,
+
+//         brand:
+//           req.body.brand,
+
+//         hallmarkCertified:
+//           req.body.hallmarkCertified === "true",
+
+//         hallmarkNumber:
+//           req.body.hallmarkNumber,
+
+//         certificationIncluded:
+//           req.body.certificationIncluded === "true",
+
+//         certificateUrl,
+
+//         featured:
+//           req.body.featured === "true",
+
+//         bestSeller:
+//           req.body.bestSeller === "true",
+
+//         trending:
+//           req.body.trending === "true",
+
+//         newArrival:
+//           req.body.newArrival === "true",
 
 //         variants,
 
-//         tags:
-//           req.body.tags
-//             ? JSON.parse(req.body.tags)
-//             : [],
-
 //         images:
 //           imageUrls,
-//         video: videoUrl
 
+//         video:
+//           videoUrl,
 
+//         tags,
+
+//         seoTitle:
+//           req.body.seoTitle,
+
+//         seoDescription:
+//           req.body.seoDescription,
+
+//         metaKeywords,
+
+//         isActive:
+//           req.body.isActive !== "false"
 //       });
 
 //     res.status(201).json({
@@ -596,13 +822,28 @@ exports.createProduct = async (req, res) => {
 
 //   } catch (error) {
 
+//     console.error(error);
+
+//     if (error.code === 11000) {
+
+//       const field =
+//         Object.keys(error.keyValue)[0];
+
+//       const value =
+//         error.keyValue[field];
+
+//       return res.status(409).json({
+//         success: false,
+//         message:
+//           `${field} '${value}' already exists`
+//       });
+
+//     }
+
 //     res.status(500).json({
-
 //       success: false,
-
 //       message:
 //         error.message
-
 //     });
 
 //   }
@@ -771,9 +1012,6 @@ exports.updateProduct = async (req, res) => {
 
     }
 
-    // =========================
-    // PARSE VARIANTS
-    // =========================
 
     // =========================
     // PARSE VARIANTS & AUTO SKU
