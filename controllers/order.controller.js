@@ -235,8 +235,22 @@ exports.createRazorpayOrder = async (req, res) => {
 };
 
 
-
 exports.verifyRazorpayPayment = async (req, res) => {
+    const totalStartedAt = Date.now();
+
+    // Log duration even if a request returns early or throws an error.
+    const timed = async (label, callback) => {
+        const startedAt = Date.now();
+
+        try {
+            return await callback();
+        } finally {
+            console.log(
+                `[PAYMENT TIMING] ${label}: ${Date.now() - startedAt} ms`
+            );
+        }
+    };
+
     try {
         const userId = req.user?.userId;
 
@@ -266,11 +280,15 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        const attempt = await PaymentAttempt.findOne({
-            _id: paymentAttemptId,
-            user: userId,
-            razorpayOrderId: razorpay_order_id
-        });
+        // 1. Payment attempt database lookup
+        const attempt = await timed(
+            "PAYMENT_ATTEMPT_LOOKUP",
+            () => PaymentAttempt.findOne({
+                _id: paymentAttemptId,
+                user: userId,
+                razorpayOrderId: razorpay_order_id
+            })
+        );
 
         if (!attempt) {
             return res.status(404).json({
@@ -300,18 +318,30 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Verify the Razorpay signature on the server.
+        // 2. Verify Razorpay signature on the server.
+        const signatureStartedAt = Date.now();
+
         const expectedSignature = crypto
             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-            .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
+            .update(
+                `${attempt.razorpayOrderId}|${razorpay_payment_id}`
+            )
             .digest("hex");
 
         const expectedBuffer = Buffer.from(expectedSignature);
         const receivedBuffer = Buffer.from(razorpay_signature);
 
+        console.log(
+            `[PAYMENT TIMING] SIGNATURE_VERIFICATION: ${Date.now() - signatureStartedAt
+            } ms`
+        );
+
         if (
             expectedBuffer.length !== receivedBuffer.length ||
-            !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+            !crypto.timingSafeEqual(
+                expectedBuffer,
+                receivedBuffer
+            )
         ) {
             return res.status(400).json({
                 success: false,
@@ -319,9 +349,10 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Confirm payment details directly with Razorpay.
-        const payment = await razorpay.payments.fetch(
-            razorpay_payment_id
+        // 3. Fetch payment details from Razorpay.
+        const payment = await timed(
+            "RAZORPAY_PAYMENT_FETCH",
+            () => razorpay.payments.fetch(razorpay_payment_id)
         );
 
         if (
@@ -343,25 +374,31 @@ exports.verifyRazorpayPayment = async (req, res) => {
             });
         }
 
-        // Mark the payment as PAID.
+        // 4. Mark the payment attempt as PAID.
         if (attempt.status === "CREATED") {
-            const updatedAttempt = await PaymentAttempt.findOneAndUpdate(
-                {
-                    _id: attempt._id,
-                    user: userId,
-                    status: "CREATED"
-                },
-                {
-                    $set: {
-                        status: "PAID",
-                        razorpayPaymentId: razorpay_payment_id
-                    }
-                },
-                { new: true }
+            const updatedAttempt = await timed(
+                "MARK_PAYMENT_PAID",
+                () => PaymentAttempt.findOneAndUpdate(
+                    {
+                        _id: attempt._id,
+                        user: userId,
+                        status: "CREATED"
+                    },
+                    {
+                        $set: {
+                            status: "PAID",
+                            razorpayPaymentId: razorpay_payment_id
+                        }
+                    },
+                    { new: true }
+                )
             );
 
             if (!updatedAttempt) {
-                const latest = await PaymentAttempt.findById(attempt._id);
+                const latest = await timed(
+                    "RECHECK_PAYMENT_ATTEMPT",
+                    () => PaymentAttempt.findById(attempt._id)
+                );
 
                 if (latest?.status === "ORDER_CREATED") {
                     return res.status(200).json({
@@ -385,20 +422,26 @@ exports.verifyRazorpayPayment = async (req, res) => {
             }
         }
 
-        // Recover if the order was created but the attempt was not updated.
-        let order = await Order.findOne({
-            razorpayOrderId: attempt.razorpayOrderId
-        });
+        // 5. Check whether the order already exists.
+        let order = await timed(
+            "EXISTING_ORDER_LOOKUP",
+            () => Order.findOne({
+                razorpayOrderId: attempt.razorpayOrderId
+            })
+        );
 
         if (!order) {
             /*
              * Build order items:
-             * - New cart attempts use attempt.items.
-             * - Older Buy Now attempts use product, variantId, quantity.
+             * - Cart attempts use attempt.items.
+             * - Buy Now attempts use product, variantId, quantity.
              */
             let orderItems = [];
 
-            if (Array.isArray(attempt.items) && attempt.items.length > 0) {
+            if (
+                Array.isArray(attempt.items) &&
+                attempt.items.length > 0
+            ) {
                 orderItems = attempt.items.map(item => ({
                     product: item.product,
                     variant: item.variantId,
@@ -424,7 +467,8 @@ exports.verifyRazorpayPayment = async (req, res) => {
 
                 return res.status(500).json({
                     success: false,
-                    message: "Payment verified, but order items could not be recovered",
+                    message:
+                        "Payment verified, but order items could not be recovered",
                     data: {
                         paymentAttemptId: attempt._id,
                         status: "PAID"
@@ -432,7 +476,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
                 });
             }
 
-            // Reuse existing createOrder, stock allocation and transaction logic.
+            // Reuse existing order creation and stock allocation logic.
             let orderResponse;
             let responseStatus = 200;
 
@@ -460,17 +504,24 @@ exports.verifyRazorpayPayment = async (req, res) => {
                 }
             };
 
-            await exports.createOrder(internalReq, internalRes);
+            // 6. Measure the entire existing createOrder controller.
+            await timed(
+                "CREATE_ORDER_TOTAL",
+                () => exports.createOrder(internalReq, internalRes)
+            );
 
             if (
                 responseStatus >= 400 ||
                 !orderResponse?.success ||
                 !orderResponse?.data?._id
             ) {
-                // A concurrent verification might already have created it.
-                order = await Order.findOne({
-                    razorpayOrderId: attempt.razorpayOrderId
-                });
+                // Recover if a concurrent request created the order.
+                order = await timed(
+                    "ORDER_RECOVERY_LOOKUP",
+                    () => Order.findOne({
+                        razorpayOrderId: attempt.razorpayOrderId
+                    })
+                );
 
                 if (!order) {
                     console.error(
@@ -490,35 +541,41 @@ exports.verifyRazorpayPayment = async (req, res) => {
                     });
                 }
             } else {
-                // createOrder returns the order document in its response.
                 order = orderResponse.data;
             }
         }
 
-        // Save the final order reference on the payment attempt.
-        const completedAttempt = await PaymentAttempt.findOneAndUpdate(
-            {
-                _id: attempt._id,
-                user: userId,
-                status: "PAID"
-            },
-            {
-                $set: {
-                    status: "ORDER_CREATED",
-                    razorpayPaymentId: razorpay_payment_id,
-                    order: order._id
-                }
-            },
-            { new: true }
+        // 7. Save the final order reference on the payment attempt.
+        const completedAttempt = await timed(
+            "MARK_ORDER_CREATED",
+            () => PaymentAttempt.findOneAndUpdate(
+                {
+                    _id: attempt._id,
+                    user: userId,
+                    status: "PAID"
+                },
+                {
+                    $set: {
+                        status: "ORDER_CREATED",
+                        razorpayPaymentId: razorpay_payment_id,
+                        order: order._id
+                    }
+                },
+                { new: true }
+            )
         );
 
         if (!completedAttempt) {
-            const latest = await PaymentAttempt.findById(attempt._id);
+            const latest = await timed(
+                "FINAL_ATTEMPT_RECHECK",
+                () => PaymentAttempt.findById(attempt._id)
+            );
 
             if (latest?.status !== "ORDER_CREATED") {
                 return res.status(500).json({
                     success: false,
-                    message: "Order exists, but payment attempt update is pending",
+                    message:
+                        "Order exists, but payment attempt update is pending",
                     data: {
                         orderId: order._id,
                         status: latest?.status
@@ -547,10 +604,337 @@ exports.verifyRazorpayPayment = async (req, res) => {
 
         return res.status(500).json({
             success: false,
-            message: "Payment was received, but order processing needs attention"
+            message:
+                "Payment was received, but order processing needs attention"
         });
+
+    } finally {
+        console.log(
+            `[PAYMENT TIMING] VERIFY_PAYMENT_TOTAL: ${Date.now() - totalStartedAt
+            } ms`
+        );
     }
 };
+
+
+// exports.verifyRazorpayPayment = async (req, res) => {
+//     console.time("VERIFY_PAYMENT_TOTAL");
+//     try {
+//         console.time("VERIFY_PAYMENT_DB_LOOKUP");
+//         const userId = req.user?.userId;
+
+//         const {
+//             paymentAttemptId,
+//             razorpay_order_id,
+//             razorpay_payment_id,
+//             razorpay_signature
+//         } = req.body;
+
+//         if (!userId) {
+//             return res.status(401).json({
+//                 success: false,
+//                 message: "Please login first"
+//             });
+//         }
+
+//         if (
+//             !paymentAttemptId ||
+//             !razorpay_order_id ||
+//             !razorpay_payment_id ||
+//             !razorpay_signature
+//         ) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "Required payment details are missing"
+//             });
+//         }
+
+//         const attempt = await PaymentAttempt.findOne({
+//             _id: paymentAttemptId,
+//             user: userId,
+//             razorpayOrderId: razorpay_order_id
+//         });
+//         console.timeEnd("VERIFY_PAYMENT_DB_LOOKUP");
+//         if (!attempt) {
+//             return res.status(404).json({
+//                 success: false,
+//                 message: "Payment attempt not found"
+//             });
+//         }
+
+//         // Return the existing order if already completed.
+//         if (attempt.status === "ORDER_CREATED") {
+//             return res.status(200).json({
+//                 success: true,
+//                 message: "Payment and order already completed",
+//                 data: {
+//                     paymentAttemptId: attempt._id,
+//                     status: "ORDER_CREATED",
+//                     orderId: attempt.order || null
+//                 }
+//             });
+//         }
+
+//         if (!["CREATED", "PAID"].includes(attempt.status)) {
+//             return res.status(409).json({
+//                 success: false,
+//                 message: "This payment attempt cannot be processed",
+//                 status: attempt.status
+//             });
+//         }
+
+//         // Verify the Razorpay signature on the server.
+//         const expectedSignature = crypto
+//             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+//             .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
+//             .digest("hex");
+
+//         const expectedBuffer = Buffer.from(expectedSignature);
+//         const receivedBuffer = Buffer.from(razorpay_signature);
+
+//         if (
+//             expectedBuffer.length !== receivedBuffer.length ||
+//             !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+//         ) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "Invalid payment signature"
+//             });
+//         }
+//         console.time("RAZORPAY_PAYMENT_FETCH");
+//         // Confirm payment details directly with Razorpay.
+//         const payment = await razorpay.payments.fetch(
+//             razorpay_payment_id
+//         );
+
+//         if (
+//             payment.order_id !== attempt.razorpayOrderId ||
+//             payment.amount !== Math.round(attempt.amount * 100) ||
+//             payment.currency !== attempt.currency
+//         ) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "Payment details do not match the payment attempt"
+//             });
+//         }
+
+//         if (payment.status !== "captured") {
+//             return res.status(409).json({
+//                 success: false,
+//                 message: "Payment is not captured yet",
+//                 paymentStatus: payment.status
+//             });
+//         }
+
+//         // Mark the payment as PAID.
+//         if (attempt.status === "CREATED") {
+//             const updatedAttempt = await PaymentAttempt.findOneAndUpdate(
+//                 {
+//                     _id: attempt._id,
+//                     user: userId,
+//                     status: "CREATED"
+//                 },
+//                 {
+//                     $set: {
+//                         status: "PAID",
+//                         razorpayPaymentId: razorpay_payment_id
+//                     }
+//                 },
+//                 { new: true }
+//             );
+
+//             if (!updatedAttempt) {
+//                 const latest = await PaymentAttempt.findById(attempt._id);
+
+//                 if (latest?.status === "ORDER_CREATED") {
+//                     return res.status(200).json({
+//                         success: true,
+//                         message: "Order already created",
+//                         data: {
+//                             paymentAttemptId: latest._id,
+//                             status: latest.status,
+//                             orderId: latest.order || null
+//                         }
+//                     });
+//                 }
+
+//                 if (latest?.status !== "PAID") {
+//                     return res.status(409).json({
+//                         success: false,
+//                         message: "Payment attempt is being processed",
+//                         status: latest?.status
+//                     });
+//                 }
+//             }
+//         }
+//         console.time("ORDER_LOOKUP");
+
+//         // Recover if the order was created but the attempt was not updated.
+//         let order = await Order.findOne({
+//             razorpayOrderId: attempt.razorpayOrderId
+//         });
+
+//         if (!order) {
+//             /*
+//              * Build order items:
+//              * - New cart attempts use attempt.items.
+//              * - Older Buy Now attempts use product, variantId, quantity.
+//              */
+//             let orderItems = [];
+
+//             if (Array.isArray(attempt.items) && attempt.items.length > 0) {
+//                 orderItems = attempt.items.map(item => ({
+//                     product: item.product,
+//                     variant: item.variantId,
+//                     quantity: item.quantity
+//                 }));
+//             } else if (
+//                 attempt.product &&
+//                 attempt.variantId &&
+//                 Number(attempt.quantity) >= 1
+//             ) {
+//                 orderItems = [{
+//                     product: attempt.product,
+//                     variant: attempt.variantId,
+//                     quantity: attempt.quantity
+//                 }];
+//             }
+
+//             if (!orderItems.length) {
+//                 console.error(
+//                     "Payment attempt has no valid order items:",
+//                     attempt._id
+//                 );
+
+//                 return res.status(500).json({
+//                     success: false,
+//                     message: "Payment verified, but order items could not be recovered",
+//                     data: {
+//                         paymentAttemptId: attempt._id,
+//                         status: "PAID"
+//                     }
+//                 });
+//             }
+
+//             // Reuse existing createOrder, stock allocation and transaction logic.
+//             let orderResponse;
+//             let responseStatus = 200;
+
+//             const internalReq = {
+//                 user: req.user,
+//                 body: {
+//                     orderSource: "ONLINE",
+//                     user: userId,
+//                     address: attempt.address,
+//                     items: orderItems,
+//                     paymentMethod: "ONLINE",
+//                     razorpayOrderId: attempt.razorpayOrderId,
+//                     razorpayPaymentId: razorpay_payment_id
+//                 }
+//             };
+
+//             const internalRes = {
+//                 status(code) {
+//                     responseStatus = code;
+//                     return this;
+//                 },
+//                 json(body) {
+//                     orderResponse = body;
+//                     return this;
+//                 }
+//             };
+//             console.time("CREATE_ORDER_TOTAL");
+//             await exports.createOrder(internalReq, internalRes);
+//             console.timeEnd("CREATE_ORDER_TOTAL");
+//             if (
+//                 responseStatus >= 400 ||
+//                 !orderResponse?.success ||
+//                 !orderResponse?.data?._id
+//             ) {
+//                 // A concurrent verification might already have created it.
+//                 order = await Order.findOne({
+//                     razorpayOrderId: attempt.razorpayOrderId
+//                 });
+
+//                 if (!order) {
+//                     console.error(
+//                         "Order creation after payment failed:",
+//                         orderResponse
+//                     );
+
+//                     return res.status(500).json({
+//                         success: false,
+//                         message:
+//                             orderResponse?.message ||
+//                             "Payment verified, but order creation failed",
+//                         data: {
+//                             paymentAttemptId: attempt._id,
+//                             status: "PAID"
+//                         }
+//                     });
+//                 }
+//             } else {
+//                 // createOrder returns the order document in its response.
+//                 order = orderResponse.data;
+//             }
+//         }
+
+//         // Save the final order reference on the payment attempt.
+//         const completedAttempt = await PaymentAttempt.findOneAndUpdate(
+//             {
+//                 _id: attempt._id,
+//                 user: userId,
+//                 status: "PAID"
+//             },
+//             {
+//                 $set: {
+//                     status: "ORDER_CREATED",
+//                     razorpayPaymentId: razorpay_payment_id,
+//                     order: order._id
+//                 }
+//             },
+//             { new: true }
+//         );
+
+//         if (!completedAttempt) {
+//             const latest = await PaymentAttempt.findById(attempt._id);
+
+//             if (latest?.status !== "ORDER_CREATED") {
+//                 return res.status(500).json({
+//                     success: false,
+//                     message: "Order exists, but payment attempt update is pending",
+//                     data: {
+//                         orderId: order._id,
+//                         status: latest?.status
+//                     }
+//                 });
+//             }
+//         }
+
+//         return res.status(200).json({
+//             success: true,
+//             message: "Payment verified and order created successfully",
+//             data: {
+//                 paymentAttemptId: attempt._id,
+//                 razorpayOrderId: attempt.razorpayOrderId,
+//                 razorpayPaymentId: razorpay_payment_id,
+//                 status: "ORDER_CREATED",
+//                 orderId: order._id
+//             }
+//         });
+
+//     } catch (error) {
+//         console.error(
+//             "Razorpay Verification / Order Creation Error:",
+//             error
+//         );
+
+//         return res.status(500).json({
+//             success: false,
+//             message: "Payment was received, but order processing needs attention"
+//         });
+//     }
+// };
 
 
 // ======================================================
