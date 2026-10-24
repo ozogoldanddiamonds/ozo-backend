@@ -617,6 +617,634 @@ exports.verifyRazorpayPayment = async (req, res) => {
 };
 
 
+exports.createOrder = async (req, res) => {
+    let session = null;
+
+    try {
+        session = await mongoose.startSession();
+        session.startTransaction();
+
+        // ==================================================
+        // 1. BASIC VALIDATION
+        // ==================================================
+
+        const {
+            orderSource,
+            user: userId,
+            address: addressId,
+            items,
+            paymentMethod,
+            razorpayOrderId,
+            razorpayPaymentId,
+            branch,
+            subBranch,
+            createdBy,
+            customerDetails,
+            discountAmount = 0,
+            couponCode = "",
+            shippingCharge = 0,
+            gstAmount = 0
+        } = req.body;
+
+        // Prevent duplicate orders for the same Razorpay order.
+        if (razorpayOrderId) {
+            const existingOrder = await Order.findOne({
+                razorpayOrderId
+            }).session(session);
+
+            if (existingOrder) {
+                await session.abortTransaction();
+
+                return res.status(200).json({
+                    success: true,
+                    message: "Order already exists for this payment",
+                    data: existingOrder
+                });
+            }
+        }
+
+        if (!orderSource) {
+            throw new Error("Order source is required");
+        }
+
+        if (!["ONLINE", "BRANCH", "SUB_BRANCH"].includes(orderSource)) {
+            throw new Error("Invalid order source");
+        }
+
+        if (!paymentMethod) {
+            throw new Error("Payment method is required");
+        }
+
+        if (!items) {
+            throw new Error("Order items are required");
+        }
+
+        // ==================================================
+        // 2. PARSE ITEMS
+        // ==================================================
+
+        let parsedItems = items;
+
+        if (typeof items === "string") {
+            try {
+                parsedItems = JSON.parse(items);
+            } catch (error) {
+                throw new Error("Invalid items JSON");
+            }
+        }
+
+        if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+            throw new Error("At least one order item is required");
+        }
+
+        // ==================================================
+        // 3. CUSTOMER VALIDATION
+        // ==================================================
+
+        let user = null;
+        let address = null;
+
+        if (orderSource === "ONLINE") {
+            if (!userId) {
+                throw new Error("User is required for online order");
+            }
+
+            if (!addressId) {
+                throw new Error("Address is required for online order");
+            }
+
+            user = await User.findById(userId).session(session);
+
+            if (!user) {
+                throw new Error("User not found");
+            }
+
+            address = await Address.findById(addressId).session(session);
+
+            if (!address) {
+                throw new Error("Address not found");
+            }
+        }
+
+        // ==================================================
+        // 4. BRANCH / SUB-BRANCH VALIDATION
+        // ==================================================
+
+        let branchAdmin = null;
+        let subBranchAdmin = null;
+        let createdByAdmin = null;
+
+        if (orderSource === "BRANCH") {
+            if (!branch) {
+                throw new Error("Branch is required");
+            }
+
+            branchAdmin = await Admin.findById(branch).session(session);
+
+            if (!branchAdmin) {
+                throw new Error("Branch admin not found");
+            }
+        }
+
+        if (orderSource === "SUB_BRANCH") {
+            if (!subBranch) {
+                throw new Error("Sub branch is required");
+            }
+
+            subBranchAdmin = await Admin.findById(subBranch).session(session);
+
+            if (!subBranchAdmin) {
+                throw new Error("Sub branch admin not found");
+            }
+        }
+
+        if (createdBy) {
+            createdByAdmin = await Admin.findById(createdBy).session(session);
+
+            if (!createdByAdmin) {
+                throw new Error("Created by admin not found");
+            }
+        }
+
+        // ==================================================
+        // 5. GENERATE ORDER NUMBER
+        // ==================================================
+
+        const timestamp = Date.now();
+
+        const orderNumber = `ORD-${timestamp}`;
+        const invoiceNumber = `INV-${timestamp}`;
+
+        // ==================================================
+        // 6. ADDRESS SNAPSHOT
+        // ==================================================
+
+        let addressSnapshot = null;
+
+        if (address) {
+            addressSnapshot = {
+                fullName: address.fullName,
+                phone: address.phone,
+                alternatePhone: address.alternatePhone,
+                addressLine1: address.addressLine1,
+                addressLine2: address.addressLine2,
+                landmark: address.landmark,
+                city: address.city,
+                state: address.state,
+                country: address.country,
+                postalCode: address.postalCode
+            };
+        }
+
+        // ==================================================
+        // 7. PREPARE ORDER ITEMS
+        // ==================================================
+
+        const orderItems = [];
+
+        let subTotal = 0;
+        let totalDiscount = Number(discountAmount) || 0;
+        let totalGst = Number(gstAmount) || 0;
+
+        // ==================================================
+        // 8. PROCESS EVERY ITEM
+        // ==================================================
+
+        for (const item of parsedItems) {
+            if (!item.product) {
+                throw new Error("Product is required");
+            }
+
+            if (!item.variant) {
+                throw new Error("Variant is required");
+            }
+
+            const quantity = Number(item.quantity) || 1;
+
+            if (!Number.isFinite(quantity) || quantity <= 0) {
+                throw new Error("Quantity must be greater than zero");
+            }
+
+            // Load product.
+            const product = await Product.findById(item.product)
+                .session(session);
+
+            if (!product) {
+                throw new Error(`Product not found: ${item.product}`);
+            }
+
+            // Find the embedded variant.
+            const variant = product.variants.find(
+                v => v._id.toString() === item.variant.toString()
+            );
+
+            if (!variant) {
+                throw new Error(
+                    `Variant not found for product ${product.name}`
+                );
+            }
+
+            // Check aggregate product stock.
+            if (Number(variant.stock) < quantity) {
+                throw new Error(
+                    `Insufficient stock for ${product.name}`
+                );
+            }
+
+            // Calculate price.
+            const priceDetails = await calculateVariantPrice(variant);
+
+            if (!priceDetails) {
+                throw new Error(
+                    `Unable to calculate price for ${product.name}`
+                );
+            }
+
+            const unitPrice = Number(priceDetails.finalPrice) || 0;
+            const totalPrice = unitPrice * quantity;
+
+            // Stone weight.
+            const stoneWeight = variant.stones?.reduce(
+                (total, stone) =>
+                    total + (Number(stone.totalWeight) || 0),
+                0
+            ) || 0;
+
+            // Diamond weight.
+            const diamondWeight = variant.stones
+                ?.filter(stone => stone.stoneType === "diamond")
+                .reduce(
+                    (total, stone) =>
+                        total + (Number(stone.totalWeight) || 0),
+                    0
+                ) || 0;
+
+            // Product snapshot.
+            const productSnapshot = {
+                name: product.name,
+                slug: product.slug,
+                image: product.images?.[0] || null,
+                category: product.category?.toString() || null,
+                subCategory: product.subCategory?.toString() || null,
+                subSubCategory: product.subSubCategory?.toString() || null,
+                productType: product.productType,
+                brand: product.brand || ""
+            };
+
+            // Stones snapshot.
+            const stonesSnapshot = variant.stones?.map(stone => ({
+                stoneType: stone.stoneType,
+                stoneCategory: stone.stoneCategory,
+                quality: stone.quality,
+                quantity: Number(stone.quantity) || 0,
+                totalWeight: Number(stone.totalWeight) || 0,
+                stoneValue: Number(stone.stoneValue) || 0
+            })) || [];
+
+            // Variant snapshot.
+            const variantSnapshot = {
+                sku: variant.sku,
+                metalType: variant.metalType,
+                purity: variant.metalPurity,
+                metalColor: variant.metalColor,
+                size: variant.size,
+                grossWeight: Number(variant.grossWeight) || 0,
+                netWeight: Number(variant.netWeight) || 0,
+                wastagePercentage: Number(variant.wastagePercentage) || 0,
+                stoneWeight,
+                diamondWeight,
+                makingCharge: Number(variant.makingCharges) || 0,
+                makingChargeType: variant.makingChargeType,
+                discountPercentage: Number(variant.discountPercentage) || 0,
+                stoneType: stonesSnapshot?.[0]?.stoneType || null,
+                gender: product.gender || null,
+                stones: stonesSnapshot
+            };
+
+            // Pricing snapshot.
+            const pricingSnapshot = {
+                goldRate: Number(priceDetails.goldRate) || 0,
+                goldValue: Number(priceDetails.goldValue) || 0,
+                wastageAmount: Number(priceDetails.wastageAmount) || 0,
+                stoneValue: Number(priceDetails.stoneValue) || 0,
+                diamondValue: Number(priceDetails.diamondValue) || 0,
+                makingCharge: Number(priceDetails.makingCharge) || 0,
+                discountAmount: Number(priceDetails.discountAmount) || 0,
+                gstPercentage: Number(priceDetails.gstPercentage) || 0,
+                gstAmount: Number(priceDetails.gstAmount) || 0,
+                finalPrice: unitPrice
+            };
+
+            // ==============================================
+            // SOURCE STOCK ALLOCATION
+            // FIFO: Supplier stock first, then maker stock.
+            // ==============================================
+
+            let remainingQuantity = quantity;
+            const stockAllocations = [];
+
+            // Supplier stock.
+            const supplierItems = await SupplierPurchaseItem.find({
+                product: product._id,
+                variantId: variant._id,
+                availableQuantity: { $gt: 0 }
+            })
+                .populate({
+                    path: "purchase",
+                    select: "purchaseDate invoiceNumber"
+                })
+                .sort({ createdAt: 1 })
+                .session(session);
+
+            for (const supplierItem of supplierItems) {
+                if (remainingQuantity <= 0) {
+                    break;
+                }
+
+                const available =
+                    Number(supplierItem.availableQuantity) || 0;
+
+                if (available <= 0) {
+                    continue;
+                }
+
+                const allocateQuantity = Math.min(
+                    remainingQuantity,
+                    available
+                );
+
+                supplierItem.availableQuantity =
+                    available - allocateQuantity;
+
+                await supplierItem.save({ session });
+
+                stockAllocations.push({
+                    sourceType: "SUPPLIER",
+                    supplierPurchaseItem: supplierItem._id,
+                    makerProductionItem: null,
+                    quantity: allocateQuantity
+                });
+
+                remainingQuantity -= allocateQuantity;
+            }
+
+            // Maker stock if supplier stock is insufficient.
+            if (remainingQuantity > 0) {
+                const makerItems = await MakerProductionItem.find({
+                    product: product._id,
+                    variantId: variant._id,
+                    availableQuantity: { $gt: 0 }
+                })
+                    .populate({
+                        path: "production",
+                        select: "issueDate productionNumber"
+                    })
+                    .sort({ createdAt: 1 })
+                    .session(session);
+
+                for (const makerItem of makerItems) {
+                    if (remainingQuantity <= 0) {
+                        break;
+                    }
+
+                    const available =
+                        Number(makerItem.availableQuantity) || 0;
+
+                    if (available <= 0) {
+                        continue;
+                    }
+
+                    const allocateQuantity = Math.min(
+                        remainingQuantity,
+                        available
+                    );
+
+                    makerItem.availableQuantity =
+                        available - allocateQuantity;
+
+                    await makerItem.save({ session });
+
+                    stockAllocations.push({
+                        sourceType: "MAKER",
+                        supplierPurchaseItem: null,
+                        makerProductionItem: makerItem._id,
+                        quantity: allocateQuantity
+                    });
+
+                    remainingQuantity -= allocateQuantity;
+                }
+            }
+
+            // Ensure source stock covers the order quantity.
+            if (remainingQuantity > 0) {
+                throw new Error(
+                    `Source stock unavailable for ${product.name} - SKU ${variant.sku}`
+                );
+            }
+
+            // Decrease aggregate product variant stock.
+            variant.stock = Number(variant.stock) - quantity;
+
+            if (variant.stock < 0) {
+                throw new Error(
+                    `Invalid stock calculation for ${product.name}`
+                );
+            }
+
+            await product.save({ session });
+
+            // Create order item.
+            orderItems.push({
+                product: product._id,
+                variant: variant._id,
+                productSnapshot,
+                stockAllocations,
+                variantSnapshot,
+                pricingSnapshot,
+                quantity,
+                unitPrice,
+                totalPrice
+            });
+
+            // Update totals.
+            subTotal += totalPrice;
+
+            totalGst +=
+                (Number(priceDetails.gstAmount) || 0) * quantity;
+        }
+
+        // ==================================================
+        // 9. CALCULATE FINAL TOTAL
+        // ==================================================
+
+        const finalTotal =
+            subTotal -
+            totalDiscount +
+            Number(shippingCharge || 0);
+
+        if (!Number.isFinite(finalTotal) || finalTotal < 0) {
+            throw new Error("Invalid order total");
+        }
+
+        // ==================================================
+        // 10. PAYMENT STATUS
+        // ==================================================
+
+        let paymentStatus = "Pending";
+
+        if (
+            paymentMethod === "CASH" ||
+            paymentMethod === "UPI" ||
+            paymentMethod === "CARD" ||
+            paymentMethod === "ONLINE" ||
+            paymentMethod === "NETBANKING"
+        ) {
+            paymentStatus = "Paid";
+        }
+
+        if (paymentMethod === "COD") {
+            paymentStatus = "Pending";
+        }
+
+        // ==================================================
+        // 11. ORDER STATUS
+        // ==================================================
+
+        const orderStatus = "Confirmed";
+
+        // ==================================================
+        // 12. CUSTOMER DETAILS
+        // ==================================================
+
+        let finalCustomerDetails = customerDetails || {};
+
+        if (user) {
+            finalCustomerDetails = {
+                name: customerDetails?.name || user.name || "",
+                phone: customerDetails?.phone || user.phone || "",
+                email: customerDetails?.email || user.email || ""
+            };
+        }
+
+        // ==================================================
+        // 13. CREATE ORDER
+        // ==================================================
+
+        const order = new Order({
+            orderNumber,
+            invoiceNumber,
+            orderSource,
+            branch: branch || null,
+            subBranch: subBranch || null,
+            createdBy: createdBy || null,
+            user: user?._id || null,
+            customerDetails: finalCustomerDetails,
+            items: orderItems,
+            address: address?._id || null,
+            addressSnapshot,
+            paymentMethod,
+            paymentStatus,
+            subTotal,
+            discountAmount: totalDiscount,
+            couponCode,
+            shippingCharge: Number(shippingCharge) || 0,
+            gstAmount: totalGst,
+            totalAmount: finalTotal,
+            orderStatus,
+            billingStatus: "Completed",
+            statusHistory: [{
+                status: orderStatus,
+                updatedBy: createdBy || null,
+                remarks: "Order created",
+                updatedAt: new Date()
+            }],
+            invoiceDate: new Date(),
+            stockUpdated: true,
+            razorpayOrderId: razorpayOrderId || null,
+            razorpayPaymentId: razorpayPaymentId || null,
+            paymentHistory: razorpayPaymentId
+                ? [{
+                    method: "ONLINE",
+                    amount: finalTotal,
+                    transactionId: razorpayPaymentId,
+                    paymentGateway: "Razorpay",
+                    paidAt: new Date()
+                }]
+                : []
+        });
+
+        await order.save({ session });
+
+        // ==================================================
+        // 14. COMMIT TRANSACTION
+        // ==================================================
+
+        await session.commitTransaction();
+
+        // ==================================================
+        // 15. SEND INVOICE EMAIL WITHOUT BLOCKING RESPONSE
+        // ==================================================
+        // Order and stock updates are already committed.
+        // SMTP failure must not delay the order response.
+
+        if (user?.email && orderSource === "ONLINE") {
+            const emailAddress = user.email;
+            const savedOrder = order;
+
+            Promise.resolve()
+                .then(() => sendInvoiceEmail(emailAddress, savedOrder))
+                .catch((emailError) => {
+                    console.error(
+                        "Invoice email failed:",
+                        emailError.message
+                    );
+                });
+        }
+
+        // ==================================================
+        // 16. RESPONSE
+        // ==================================================
+
+        return res.status(201).json({
+            success: true,
+            message: "Order created successfully",
+            data: order
+        });
+
+    } catch (error) {
+        // Roll back only if the transaction is still active.
+        if (session?.inTransaction()) {
+            try {
+                await session.abortTransaction();
+            } catch (rollbackError) {
+                console.error(
+                    "Order transaction rollback failed:",
+                    rollbackError.message
+                );
+            }
+        }
+
+        console.error("Create Order Error:", error);
+
+        return res.status(400).json({
+            success: false,
+            message: error.message || "Failed to create order"
+        });
+
+    } finally {
+        if (session) {
+            try {
+                await session.endSession();
+            } catch (sessionError) {
+                console.error(
+                    "MongoDB session cleanup failed:",
+                    sessionError.message
+                );
+            }
+        }
+    }
+};
+
 // exports.verifyRazorpayPayment = async (req, res) => {
 //     console.time("VERIFY_PAYMENT_TOTAL");
 //     try {
@@ -941,1127 +1569,1127 @@ exports.verifyRazorpayPayment = async (req, res) => {
 // CREATE ORDER
 // ======================================================
 
-exports.createOrder = async (req, res) => {
-
-    const session = await mongoose.startSession();
+// exports.createOrder = async (req, res) => {
+
+//     const session = await mongoose.startSession();
 
-    session.startTransaction();
+//     session.startTransaction();
 
-    try {
+//     try {
 
-        // ==================================================
-        // 1. BASIC VALIDATION
-        // ==================================================
+//         // ==================================================
+//         // 1. BASIC VALIDATION
+//         // ==================================================
 
-        const {
-            orderSource,
-            user: userId,
-            address: addressId,
-            items,
-            paymentMethod,
-            razorpayOrderId,
-            razorpayPaymentId,
-            branch,
-            subBranch,
-            createdBy,
+//         const {
+//             orderSource,
+//             user: userId,
+//             address: addressId,
+//             items,
+//             paymentMethod,
+//             razorpayOrderId,
+//             razorpayPaymentId,
+//             branch,
+//             subBranch,
+//             createdBy,
 
-            customerDetails,
+//             customerDetails,
 
-            discountAmount = 0,
-            couponCode = "",
-            shippingCharge = 0,
-            gstAmount = 0
-        } = req.body;
-        if (razorpayOrderId) {
-            const existingOrder = await Order.findOne({
-                razorpayOrderId
-            }).session(session);
+//             discountAmount = 0,
+//             couponCode = "",
+//             shippingCharge = 0,
+//             gstAmount = 0
+//         } = req.body;
+//         if (razorpayOrderId) {
+//             const existingOrder = await Order.findOne({
+//                 razorpayOrderId
+//             }).session(session);
 
-            if (existingOrder) {
-                await session.abortTransaction();
-                session.endSession();
+//             if (existingOrder) {
+//                 await session.abortTransaction();
+//                 session.endSession();
 
-                return res.status(200).json({
-                    success: true,
-                    message: "Order already exists for this payment",
-                    data: existingOrder
-                });
-            }
-        }
+//                 return res.status(200).json({
+//                     success: true,
+//                     message: "Order already exists for this payment",
+//                     data: existingOrder
+//                 });
+//             }
+//         }
 
-        if (!orderSource) {
-            throw new Error("Order source is required");
-        }
+//         if (!orderSource) {
+//             throw new Error("Order source is required");
+//         }
 
-        if (
-            !["ONLINE", "BRANCH", "SUB_BRANCH"]
-                .includes(orderSource)
-        ) {
-            throw new Error("Invalid order source");
-        }
+//         if (
+//             !["ONLINE", "BRANCH", "SUB_BRANCH"]
+//                 .includes(orderSource)
+//         ) {
+//             throw new Error("Invalid order source");
+//         }
 
 
-        if (!paymentMethod) {
-            throw new Error("Payment method is required");
-        }
+//         if (!paymentMethod) {
+//             throw new Error("Payment method is required");
+//         }
 
 
-        if (!items) {
-            throw new Error("Order items are required");
-        }
+//         if (!items) {
+//             throw new Error("Order items are required");
+//         }
 
 
-        // ==================================================
-        // 2. PARSE ITEMS
-        // ==================================================
+//         // ==================================================
+//         // 2. PARSE ITEMS
+//         // ==================================================
 
-        let parsedItems = items;
+//         let parsedItems = items;
 
-        if (typeof items === "string") {
-            try {
-                parsedItems = JSON.parse(items);
-            } catch (error) {
-                throw new Error("Invalid items JSON");
-            }
-        }
+//         if (typeof items === "string") {
+//             try {
+//                 parsedItems = JSON.parse(items);
+//             } catch (error) {
+//                 throw new Error("Invalid items JSON");
+//             }
+//         }
 
 
-        if (
-            !Array.isArray(parsedItems) ||
-            parsedItems.length === 0
-        ) {
-            throw new Error(
-                "At least one order item is required"
-            );
-        }
+//         if (
+//             !Array.isArray(parsedItems) ||
+//             parsedItems.length === 0
+//         ) {
+//             throw new Error(
+//                 "At least one order item is required"
+//             );
+//         }
 
 
-        // ==================================================
-        // 3. CUSTOMER VALIDATION
-        // ==================================================
+//         // ==================================================
+//         // 3. CUSTOMER VALIDATION
+//         // ==================================================
 
-        let user = null;
-        let address = null;
+//         let user = null;
+//         let address = null;
 
 
-        if (orderSource === "ONLINE") {
+//         if (orderSource === "ONLINE") {
 
-            if (!userId) {
-                throw new Error(
-                    "User is required for online order"
-                );
-            }
+//             if (!userId) {
+//                 throw new Error(
+//                     "User is required for online order"
+//                 );
+//             }
 
-            if (!addressId) {
-                throw new Error(
-                    "Address is required for online order"
-                );
-            }
+//             if (!addressId) {
+//                 throw new Error(
+//                     "Address is required for online order"
+//                 );
+//             }
 
 
-            user = await User.findById(userId)
-                .session(session);
+//             user = await User.findById(userId)
+//                 .session(session);
 
-            if (!user) {
-                throw new Error("User not found");
-            }
+//             if (!user) {
+//                 throw new Error("User not found");
+//             }
 
 
-            address = await Address.findById(addressId)
-                .session(session);
+//             address = await Address.findById(addressId)
+//                 .session(session);
 
-            if (!address) {
-                throw new Error("Address not found");
-            }
-        }
+//             if (!address) {
+//                 throw new Error("Address not found");
+//             }
+//         }
 
 
-        // ==================================================
-        // 4. BRANCH / SUB-BRANCH VALIDATION
-        // ==================================================
+//         // ==================================================
+//         // 4. BRANCH / SUB-BRANCH VALIDATION
+//         // ==================================================
 
-        let branchAdmin = null;
-        let subBranchAdmin = null;
-        let createdByAdmin = null;
+//         let branchAdmin = null;
+//         let subBranchAdmin = null;
+//         let createdByAdmin = null;
 
 
-        if (orderSource === "BRANCH") {
+//         if (orderSource === "BRANCH") {
 
-            if (!branch) {
-                throw new Error(
-                    "Branch is required"
-                );
-            }
+//             if (!branch) {
+//                 throw new Error(
+//                     "Branch is required"
+//                 );
+//             }
 
-            branchAdmin = await Admin.findById(branch)
-                .session(session);
+//             branchAdmin = await Admin.findById(branch)
+//                 .session(session);
 
-            if (!branchAdmin) {
-                throw new Error(
-                    "Branch admin not found"
-                );
-            }
-        }
+//             if (!branchAdmin) {
+//                 throw new Error(
+//                     "Branch admin not found"
+//                 );
+//             }
+//         }
 
 
-        if (orderSource === "SUB_BRANCH") {
+//         if (orderSource === "SUB_BRANCH") {
 
-            if (!subBranch) {
-                throw new Error(
-                    "Sub branch is required"
-                );
-            }
+//             if (!subBranch) {
+//                 throw new Error(
+//                     "Sub branch is required"
+//                 );
+//             }
 
-            subBranchAdmin = await Admin.findById(subBranch)
-                .session(session);
+//             subBranchAdmin = await Admin.findById(subBranch)
+//                 .session(session);
 
-            if (!subBranchAdmin) {
-                throw new Error(
-                    "Sub branch admin not found"
-                );
-            }
-        }
+//             if (!subBranchAdmin) {
+//                 throw new Error(
+//                     "Sub branch admin not found"
+//                 );
+//             }
+//         }
 
 
-        if (createdBy) {
+//         if (createdBy) {
 
-            createdByAdmin = await Admin.findById(createdBy)
-                .session(session);
+//             createdByAdmin = await Admin.findById(createdBy)
+//                 .session(session);
 
-            if (!createdByAdmin) {
-                throw new Error(
-                    "Created by admin not found"
-                );
-            }
-        }
+//             if (!createdByAdmin) {
+//                 throw new Error(
+//                     "Created by admin not found"
+//                 );
+//             }
+//         }
 
 
-        // ==================================================
-        // 5. GENERATE ORDER NUMBER
-        // ==================================================
+//         // ==================================================
+//         // 5. GENERATE ORDER NUMBER
+//         // ==================================================
 
-        const timestamp = Date.now();
+//         const timestamp = Date.now();
 
-        const orderNumber =
-            `ORD-${timestamp}`;
+//         const orderNumber =
+//             `ORD-${timestamp}`;
 
 
-        const invoiceNumber =
-            `INV-${timestamp}`;
+//         const invoiceNumber =
+//             `INV-${timestamp}`;
 
 
-        // ==================================================
-        // 6. ADDRESS SNAPSHOT
-        // ==================================================
+//         // ==================================================
+//         // 6. ADDRESS SNAPSHOT
+//         // ==================================================
 
-        let addressSnapshot = null;
+//         let addressSnapshot = null;
 
-        if (address) {
+//         if (address) {
 
-            addressSnapshot = {
+//             addressSnapshot = {
 
-                fullName: address.fullName,
+//                 fullName: address.fullName,
 
-                phone: address.phone,
+//                 phone: address.phone,
 
-                alternatePhone:
-                    address.alternatePhone,
+//                 alternatePhone:
+//                     address.alternatePhone,
 
-                addressLine1:
-                    address.addressLine1,
+//                 addressLine1:
+//                     address.addressLine1,
 
-                addressLine2:
-                    address.addressLine2,
+//                 addressLine2:
+//                     address.addressLine2,
 
-                landmark:
-                    address.landmark,
+//                 landmark:
+//                     address.landmark,
 
-                city:
-                    address.city,
+//                 city:
+//                     address.city,
 
-                state:
-                    address.state,
+//                 state:
+//                     address.state,
 
-                country:
-                    address.country,
+//                 country:
+//                     address.country,
 
-                postalCode:
-                    address.postalCode
-            };
-        }
+//                 postalCode:
+//                     address.postalCode
+//             };
+//         }
 
 
-        // ==================================================
-        // 7. PREPARE ORDER ITEMS
-        // ==================================================
+//         // ==================================================
+//         // 7. PREPARE ORDER ITEMS
+//         // ==================================================
 
-        const orderItems = [];
+//         const orderItems = [];
 
 
-        let subTotal = 0;
-        let totalDiscount = Number(discountAmount) || 0;
-        let totalGst = Number(gstAmount) || 0;
+//         let subTotal = 0;
+//         let totalDiscount = Number(discountAmount) || 0;
+//         let totalGst = Number(gstAmount) || 0;
 
 
-        // ==================================================
-        // 8. PROCESS EVERY ITEM
-        // ==================================================
+//         // ==================================================
+//         // 8. PROCESS EVERY ITEM
+//         // ==================================================
 
-        for (const item of parsedItems) {
+//         for (const item of parsedItems) {
 
-            if (!item.product) {
-                throw new Error(
-                    "Product is required"
-                );
-            }
+//             if (!item.product) {
+//                 throw new Error(
+//                     "Product is required"
+//                 );
+//             }
 
-            if (!item.variant) {
-                throw new Error(
-                    "Variant is required"
-                );
-            }
+//             if (!item.variant) {
+//                 throw new Error(
+//                     "Variant is required"
+//                 );
+//             }
 
 
-            const quantity =
-                Number(item.quantity) || 1;
+//             const quantity =
+//                 Number(item.quantity) || 1;
 
 
-            if (quantity <= 0) {
-                throw new Error(
-                    "Quantity must be greater than zero"
-                );
-            }
+//             if (quantity <= 0) {
+//                 throw new Error(
+//                     "Quantity must be greater than zero"
+//                 );
+//             }
 
 
-            // ==============================================
-            // LOAD PRODUCT
-            // ==============================================
+//             // ==============================================
+//             // LOAD PRODUCT
+//             // ==============================================
 
-            const product =
-                await Product.findById(item.product)
-                    .session(session);
+//             const product =
+//                 await Product.findById(item.product)
+//                     .session(session);
 
 
-            if (!product) {
-                throw new Error(
-                    `Product not found: ${item.product}`
-                );
-            }
+//             if (!product) {
+//                 throw new Error(
+//                     `Product not found: ${item.product}`
+//                 );
+//             }
 
 
-            // ==============================================
-            // FIND EMBEDDED VARIANT
-            // ==============================================
+//             // ==============================================
+//             // FIND EMBEDDED VARIANT
+//             // ==============================================
 
-            const variant =
-                product.variants.find(
-                    v =>
-                        v._id.toString() ===
-                        item.variant.toString()
-                );
+//             const variant =
+//                 product.variants.find(
+//                     v =>
+//                         v._id.toString() ===
+//                         item.variant.toString()
+//                 );
 
 
-            if (!variant) {
-                throw new Error(
-                    `Variant not found for product ${product.name}`
-                );
-            }
+//             if (!variant) {
+//                 throw new Error(
+//                     `Variant not found for product ${product.name}`
+//                 );
+//             }
 
 
-            // ==============================================
-            // PRODUCT STOCK CHECK
-            // ==============================================
+//             // ==============================================
+//             // PRODUCT STOCK CHECK
+//             // ==============================================
 
-            if (
-                Number(variant.stock) <
-                quantity
-            ) {
-                throw new Error(
-                    `Insufficient stock for ${product.name}`
-                );
-            }
+//             if (
+//                 Number(variant.stock) <
+//                 quantity
+//             ) {
+//                 throw new Error(
+//                     `Insufficient stock for ${product.name}`
+//                 );
+//             }
 
 
-            // ==============================================
-            // CALCULATE PRICE
-            // ==============================================
+//             // ==============================================
+//             // CALCULATE PRICE
+//             // ==============================================
 
-            const priceDetails =
-                await calculateVariantPrice(variant);
+//             const priceDetails =
+//                 await calculateVariantPrice(variant);
 
 
-            if (!priceDetails) {
-                throw new Error(
-                    `Unable to calculate price for ${product.name}`
-                );
-            }
+//             if (!priceDetails) {
+//                 throw new Error(
+//                     `Unable to calculate price for ${product.name}`
+//                 );
+//             }
 
 
-            const unitPrice =
-                Number(
-                    priceDetails.finalPrice
-                ) || 0;
+//             const unitPrice =
+//                 Number(
+//                     priceDetails.finalPrice
+//                 ) || 0;
 
 
-            const totalPrice =
-                unitPrice * quantity;
+//             const totalPrice =
+//                 unitPrice * quantity;
 
 
-            // ==============================================
-            // STONE WEIGHT
-            // ==============================================
+//             // ==============================================
+//             // STONE WEIGHT
+//             // ==============================================
 
-            const stoneWeight =
-                variant.stones?.reduce(
-                    (total, stone) =>
-                        total +
-                        (
-                            Number(stone.totalWeight) ||
-                            0
-                        ),
-                    0
-                ) || 0;
+//             const stoneWeight =
+//                 variant.stones?.reduce(
+//                     (total, stone) =>
+//                         total +
+//                         (
+//                             Number(stone.totalWeight) ||
+//                             0
+//                         ),
+//                     0
+//                 ) || 0;
 
 
-            // ==============================================
-            // DIAMOND WEIGHT
-            // ==============================================
+//             // ==============================================
+//             // DIAMOND WEIGHT
+//             // ==============================================
 
-            const diamondWeight =
-                variant.stones
-                    ?.filter(
-                        stone =>
-                            stone.stoneType ===
-                            "diamond"
-                    )
-                    .reduce(
-                        (total, stone) =>
-                            total +
-                            (
-                                Number(
-                                    stone.totalWeight
-                                ) || 0
-                            ),
-                        0
-                    ) || 0;
+//             const diamondWeight =
+//                 variant.stones
+//                     ?.filter(
+//                         stone =>
+//                             stone.stoneType ===
+//                             "diamond"
+//                     )
+//                     .reduce(
+//                         (total, stone) =>
+//                             total +
+//                             (
+//                                 Number(
+//                                     stone.totalWeight
+//                                 ) || 0
+//                             ),
+//                         0
+//                     ) || 0;
 
 
-            // ==============================================
-            // PRODUCT SNAPSHOT
-            // ==============================================
+//             // ==============================================
+//             // PRODUCT SNAPSHOT
+//             // ==============================================
 
-            const productSnapshot = {
+//             const productSnapshot = {
 
-                name: product.name,
+//                 name: product.name,
 
-                slug: product.slug,
+//                 slug: product.slug,
 
-                image:
-                    product.images?.[0] || null,
+//                 image:
+//                     product.images?.[0] || null,
 
-                category:
-                    product.category?.toString() ||
-                    null,
+//                 category:
+//                     product.category?.toString() ||
+//                     null,
 
-                subCategory:
-                    product.subCategory?.toString() ||
-                    null,
+//                 subCategory:
+//                     product.subCategory?.toString() ||
+//                     null,
 
-                subSubCategory:
-                    product.subSubCategory?.toString() ||
-                    null,
+//                 subSubCategory:
+//                     product.subSubCategory?.toString() ||
+//                     null,
 
-                productType:
-                    product.productType,
+//                 productType:
+//                     product.productType,
 
-                brand:
-                    product.brand || ""
-            };
+//                 brand:
+//                     product.brand || ""
+//             };
 
 
-            // ==============================================
-            // STONES SNAPSHOT
-            // ==============================================
+//             // ==============================================
+//             // STONES SNAPSHOT
+//             // ==============================================
 
-            const stonesSnapshot =
-                variant.stones?.map(stone => ({
+//             const stonesSnapshot =
+//                 variant.stones?.map(stone => ({
 
-                    stoneType:
-                        stone.stoneType,
+//                     stoneType:
+//                         stone.stoneType,
 
-                    stoneCategory:
-                        stone.stoneCategory,
+//                     stoneCategory:
+//                         stone.stoneCategory,
 
-                    quality:
-                        stone.quality,
+//                     quality:
+//                         stone.quality,
 
-                    quantity:
-                        Number(stone.quantity) || 0,
+//                     quantity:
+//                         Number(stone.quantity) || 0,
 
-                    totalWeight:
-                        Number(
-                            stone.totalWeight
-                        ) || 0,
+//                     totalWeight:
+//                         Number(
+//                             stone.totalWeight
+//                         ) || 0,
 
-                    // Calculator may return stone value
-                    stoneValue:
-                        Number(
-                            stone.stoneValue
-                        ) || 0
+//                     // Calculator may return stone value
+//                     stoneValue:
+//                         Number(
+//                             stone.stoneValue
+//                         ) || 0
 
-                })) || [];
+//                 })) || [];
 
 
-            // ==============================================
-            // VARIANT SNAPSHOT
-            // ==============================================
+//             // ==============================================
+//             // VARIANT SNAPSHOT
+//             // ==============================================
 
-            const variantSnapshot = {
+//             const variantSnapshot = {
 
-                sku:
-                    variant.sku,
+//                 sku:
+//                     variant.sku,
 
-                metalType:
-                    variant.metalType,
+//                 metalType:
+//                     variant.metalType,
 
-                purity:
-                    variant.metalPurity,
+//                 purity:
+//                     variant.metalPurity,
 
-                metalColor:
-                    variant.metalColor,
+//                 metalColor:
+//                     variant.metalColor,
 
-                size:
-                    variant.size,
+//                 size:
+//                     variant.size,
 
-                grossWeight:
-                    Number(
-                        variant.grossWeight
-                    ) || 0,
+//                 grossWeight:
+//                     Number(
+//                         variant.grossWeight
+//                     ) || 0,
 
-                netWeight:
-                    Number(
-                        variant.netWeight
-                    ) || 0,
+//                 netWeight:
+//                     Number(
+//                         variant.netWeight
+//                     ) || 0,
 
-                wastagePercentage:
-                    Number(
-                        variant.wastagePercentage
-                    ) || 0,
+//                 wastagePercentage:
+//                     Number(
+//                         variant.wastagePercentage
+//                     ) || 0,
 
-                stoneWeight,
+//                 stoneWeight,
 
-                diamondWeight,
+//                 diamondWeight,
 
-                makingCharge:
-                    Number(
-                        variant.makingCharges
-                    ) || 0,
+//                 makingCharge:
+//                     Number(
+//                         variant.makingCharges
+//                     ) || 0,
 
-                makingChargeType:
-                    variant.makingChargeType,
+//                 makingChargeType:
+//                     variant.makingChargeType,
 
-                discountPercentage:
-                    Number(
-                        variant.discountPercentage
-                    ) || 0,
+//                 discountPercentage:
+//                     Number(
+//                         variant.discountPercentage
+//                     ) || 0,
 
-                stoneType:
-                    stonesSnapshot?.[0]?.stoneType ||
-                    null,
+//                 stoneType:
+//                     stonesSnapshot?.[0]?.stoneType ||
+//                     null,
 
-                gender:
-                    product.gender || null,
+//                 gender:
+//                     product.gender || null,
 
-                stones:
-                    stonesSnapshot
-            };
+//                 stones:
+//                     stonesSnapshot
+//             };
 
 
-            // ==============================================
-            // PRICING SNAPSHOT
-            // ==============================================
+//             // ==============================================
+//             // PRICING SNAPSHOT
+//             // ==============================================
 
-            const pricingSnapshot = {
+//             const pricingSnapshot = {
 
-                goldRate:
-                    Number(
-                        priceDetails.goldRate
-                    ) || 0,
+//                 goldRate:
+//                     Number(
+//                         priceDetails.goldRate
+//                     ) || 0,
 
-                goldValue:
-                    Number(
-                        priceDetails.goldValue
-                    ) || 0,
+//                 goldValue:
+//                     Number(
+//                         priceDetails.goldValue
+//                     ) || 0,
 
-                wastageAmount:
-                    Number(
-                        priceDetails.wastageAmount
-                    ) || 0,
+//                 wastageAmount:
+//                     Number(
+//                         priceDetails.wastageAmount
+//                     ) || 0,
 
-                stoneValue:
-                    Number(
-                        priceDetails.stoneValue
-                    ) || 0,
+//                 stoneValue:
+//                     Number(
+//                         priceDetails.stoneValue
+//                     ) || 0,
 
-                diamondValue:
-                    Number(
-                        priceDetails.diamondValue
-                    ) || 0,
+//                 diamondValue:
+//                     Number(
+//                         priceDetails.diamondValue
+//                     ) || 0,
 
-                makingCharge:
-                    Number(
-                        priceDetails.makingCharge
-                    ) || 0,
+//                 makingCharge:
+//                     Number(
+//                         priceDetails.makingCharge
+//                     ) || 0,
 
-                discountAmount:
-                    Number(
-                        priceDetails.discountAmount
-                    ) || 0,
+//                 discountAmount:
+//                     Number(
+//                         priceDetails.discountAmount
+//                     ) || 0,
 
-                gstPercentage:
-                    Number(
-                        priceDetails.gstPercentage
-                    ) || 0,
+//                 gstPercentage:
+//                     Number(
+//                         priceDetails.gstPercentage
+//                     ) || 0,
 
-                gstAmount:
-                    Number(
-                        priceDetails.gstAmount
-                    ) || 0,
+//                 gstAmount:
+//                     Number(
+//                         priceDetails.gstAmount
+//                     ) || 0,
 
-                finalPrice:
-                    unitPrice
-            };
+//                 finalPrice:
+//                     unitPrice
+//             };
 
 
-            // ==============================================
-            // SOURCE STOCK ALLOCATION
-            // ==============================================
-            //
-            // FIFO:
-            // Oldest available stock first.
-            //
-            // Supplier purchase date / maker production
-            // issue date based ordering can be applied here.
+//             // ==============================================
+//             // SOURCE STOCK ALLOCATION
+//             // ==============================================
+//             //
+//             // FIFO:
+//             // Oldest available stock first.
+//             //
+//             // Supplier purchase date / maker production
+//             // issue date based ordering can be applied here.
 
-            let remainingQuantity =
-                quantity;
+//             let remainingQuantity =
+//                 quantity;
 
 
-            const stockAllocations = [];
+//             const stockAllocations = [];
 
 
-            // ==============================================
-            // SUPPLIER STOCK
-            // ==============================================
+//             // ==============================================
+//             // SUPPLIER STOCK
+//             // ==============================================
 
-            const supplierItems =
-                await SupplierPurchaseItem
-                    .find({
-                        product: product._id,
+//             const supplierItems =
+//                 await SupplierPurchaseItem
+//                     .find({
+//                         product: product._id,
 
-                        variantId: variant._id,
+//                         variantId: variant._id,
 
-                        availableQuantity: {
-                            $gt: 0
-                        }
-                    })
-                    .populate({
-                        path: "purchase",
-                        select: "purchaseDate invoiceNumber"
-                    })
-                    .sort({
-                        createdAt: 1
-                    })
-                    .session(session);
+//                         availableQuantity: {
+//                             $gt: 0
+//                         }
+//                     })
+//                     .populate({
+//                         path: "purchase",
+//                         select: "purchaseDate invoiceNumber"
+//                     })
+//                     .sort({
+//                         createdAt: 1
+//                     })
+//                     .session(session);
 
 
-            for (
-                const supplierItem
-                of supplierItems
-            ) {
+//             for (
+//                 const supplierItem
+//                 of supplierItems
+//             ) {
 
-                if (remainingQuantity <= 0) {
-                    break;
-                }
+//                 if (remainingQuantity <= 0) {
+//                     break;
+//                 }
 
 
-                const available =
-                    Number(
-                        supplierItem.availableQuantity
-                    ) || 0;
+//                 const available =
+//                     Number(
+//                         supplierItem.availableQuantity
+//                     ) || 0;
 
 
-                if (available <= 0) {
-                    continue;
-                }
+//                 if (available <= 0) {
+//                     continue;
+//                 }
 
 
-                const allocateQuantity =
-                    Math.min(
-                        remainingQuantity,
-                        available
-                    );
+//                 const allocateQuantity =
+//                     Math.min(
+//                         remainingQuantity,
+//                         available
+//                     );
 
 
-                supplierItem.availableQuantity =
-                    available -
-                    allocateQuantity;
+//                 supplierItem.availableQuantity =
+//                     available -
+//                     allocateQuantity;
 
 
-                await supplierItem.save({
-                    session
-                });
+//                 await supplierItem.save({
+//                     session
+//                 });
 
 
-                stockAllocations.push({
+//                 stockAllocations.push({
 
-                    sourceType:
-                        "SUPPLIER",
+//                     sourceType:
+//                         "SUPPLIER",
 
-                    supplierPurchaseItem:
-                        supplierItem._id,
+//                     supplierPurchaseItem:
+//                         supplierItem._id,
 
-                    makerProductionItem:
-                        null,
+//                     makerProductionItem:
+//                         null,
 
-                    quantity:
-                        allocateQuantity
-                });
+//                     quantity:
+//                         allocateQuantity
+//                 });
 
 
-                remainingQuantity -=
-                    allocateQuantity;
-            }
+//                 remainingQuantity -=
+//                     allocateQuantity;
+//             }
 
 
-            // ==============================================
-            // MAKER STOCK
-            // ==============================================
+//             // ==============================================
+//             // MAKER STOCK
+//             // ==============================================
 
-            if (remainingQuantity > 0) {
+//             if (remainingQuantity > 0) {
 
-                const makerItems =
-                    await MakerProductionItem
-                        .find({
-                            product: product._id,
+//                 const makerItems =
+//                     await MakerProductionItem
+//                         .find({
+//                             product: product._id,
 
-                            variantId: variant._id,
+//                             variantId: variant._id,
 
-                            availableQuantity: {
-                                $gt: 0
-                            }
-                        })
-                        .populate({
-                            path: "production",
-                            select:
-                                "issueDate productionNumber"
-                        })
-                        .sort({
-                            createdAt: 1
-                        })
-                        .session(session);
+//                             availableQuantity: {
+//                                 $gt: 0
+//                             }
+//                         })
+//                         .populate({
+//                             path: "production",
+//                             select:
+//                                 "issueDate productionNumber"
+//                         })
+//                         .sort({
+//                             createdAt: 1
+//                         })
+//                         .session(session);
 
 
-                for (
-                    const makerItem
-                    of makerItems
-                ) {
+//                 for (
+//                     const makerItem
+//                     of makerItems
+//                 ) {
 
-                    if (
-                        remainingQuantity <= 0
-                    ) {
-                        break;
-                    }
+//                     if (
+//                         remainingQuantity <= 0
+//                     ) {
+//                         break;
+//                     }
 
 
-                    const available =
-                        Number(
-                            makerItem.availableQuantity
-                        ) || 0;
+//                     const available =
+//                         Number(
+//                             makerItem.availableQuantity
+//                         ) || 0;
 
 
-                    if (available <= 0) {
-                        continue;
-                    }
+//                     if (available <= 0) {
+//                         continue;
+//                     }
 
 
-                    const allocateQuantity =
-                        Math.min(
-                            remainingQuantity,
-                            available
-                        );
+//                     const allocateQuantity =
+//                         Math.min(
+//                             remainingQuantity,
+//                             available
+//                         );
 
 
-                    makerItem.availableQuantity =
-                        available -
-                        allocateQuantity;
+//                     makerItem.availableQuantity =
+//                         available -
+//                         allocateQuantity;
 
 
-                    await makerItem.save({
-                        session
-                    });
+//                     await makerItem.save({
+//                         session
+//                     });
 
 
-                    stockAllocations.push({
+//                     stockAllocations.push({
 
-                        sourceType:
-                            "MAKER",
+//                         sourceType:
+//                             "MAKER",
 
-                        supplierPurchaseItem:
-                            null,
+//                         supplierPurchaseItem:
+//                             null,
 
-                        makerProductionItem:
-                            makerItem._id,
+//                         makerProductionItem:
+//                             makerItem._id,
 
-                        quantity:
-                            allocateQuantity
-                    });
+//                         quantity:
+//                             allocateQuantity
+//                     });
 
 
-                    remainingQuantity -=
-                        allocateQuantity;
-                }
-            }
+//                     remainingQuantity -=
+//                         allocateQuantity;
+//                 }
+//             }
 
 
-            // ==============================================
-            // FINAL SOURCE STOCK VALIDATION
-            // ==============================================
+//             // ==============================================
+//             // FINAL SOURCE STOCK VALIDATION
+//             // ==============================================
 
-            if (remainingQuantity > 0) {
+//             if (remainingQuantity > 0) {
 
-                throw new Error(
-                    `Source stock unavailable for ${product.name} - SKU ${variant.sku}`
-                );
-            }
+//                 throw new Error(
+//                     `Source stock unavailable for ${product.name} - SKU ${variant.sku}`
+//                 );
+//             }
 
 
-            // ==============================================
-            // DECREASE PRODUCT AGGREGATE STOCK
-            // ==============================================
+//             // ==============================================
+//             // DECREASE PRODUCT AGGREGATE STOCK
+//             // ==============================================
 
-            variant.stock =
-                Number(variant.stock) -
-                quantity;
+//             variant.stock =
+//                 Number(variant.stock) -
+//                 quantity;
 
 
-            if (variant.stock < 0) {
+//             if (variant.stock < 0) {
 
-                throw new Error(
-                    `Invalid stock calculation for ${product.name}`
-                );
-            }
+//                 throw new Error(
+//                     `Invalid stock calculation for ${product.name}`
+//                 );
+//             }
 
 
-            await product.save({
-                session
-            });
+//             await product.save({
+//                 session
+//             });
 
 
-            // ==============================================
-            // CREATE ORDER ITEM
-            // ==============================================
+//             // ==============================================
+//             // CREATE ORDER ITEM
+//             // ==============================================
 
-            orderItems.push({
+//             orderItems.push({
 
-                product:
-                    product._id,
+//                 product:
+//                     product._id,
 
-                variant:
-                    variant._id,
+//                 variant:
+//                     variant._id,
 
-                productSnapshot,
+//                 productSnapshot,
 
-                stockAllocations,
+//                 stockAllocations,
 
-                variantSnapshot,
+//                 variantSnapshot,
 
-                pricingSnapshot,
+//                 pricingSnapshot,
 
-                quantity,
+//                 quantity,
 
-                unitPrice,
+//                 unitPrice,
 
-                totalPrice
-            });
+//                 totalPrice
+//             });
 
 
-            // ==============================================
-            // TOTALS
-            // ==============================================
+//             // ==============================================
+//             // TOTALS
+//             // ==============================================
 
-            subTotal += totalPrice;
+//             subTotal += totalPrice;
 
-            totalGst +=
-                Number(
-                    priceDetails.gstAmount
-                ) *
-                quantity;
-        }
+//             totalGst +=
+//                 Number(
+//                     priceDetails.gstAmount
+//                 ) *
+//                 quantity;
+//         }
 
 
-        // ==================================================
-        // 9. CALCULATE FINAL TOTAL
-        // ==================================================
+//         // ==================================================
+//         // 9. CALCULATE FINAL TOTAL
+//         // ==================================================
 
-        const finalTotal =
-            subTotal -
-            totalDiscount +
-            Number(shippingCharge || 0);
+//         const finalTotal =
+//             subTotal -
+//             totalDiscount +
+//             Number(shippingCharge || 0);
 
 
-        if (finalTotal < 0) {
+//         if (finalTotal < 0) {
 
-            throw new Error(
-                "Invalid order total"
-            );
-        }
+//             throw new Error(
+//                 "Invalid order total"
+//             );
+//         }
 
 
-        // ==================================================
-        // 10. PAYMENT STATUS
-        // ==================================================
+//         // ==================================================
+//         // 10. PAYMENT STATUS
+//         // ==================================================
 
-        let paymentStatus = "Pending";
+//         let paymentStatus = "Pending";
 
-        if (
-            paymentMethod === "CASH" ||
-            paymentMethod === "UPI" ||
-            paymentMethod === "CARD" ||
-            paymentMethod === "ONLINE" ||
-            paymentMethod === "NETBANKING"
-        ) {
-            paymentStatus = "Paid";
-        }
+//         if (
+//             paymentMethod === "CASH" ||
+//             paymentMethod === "UPI" ||
+//             paymentMethod === "CARD" ||
+//             paymentMethod === "ONLINE" ||
+//             paymentMethod === "NETBANKING"
+//         ) {
+//             paymentStatus = "Paid";
+//         }
 
-        if (
-            paymentMethod === "COD"
-        ) {
-            paymentStatus = "Pending";
-        }
+//         if (
+//             paymentMethod === "COD"
+//         ) {
+//             paymentStatus = "Pending";
+//         }
 
 
-        // ==================================================
-        // 11. ORDER STATUS
-        // ==================================================
+//         // ==================================================
+//         // 11. ORDER STATUS
+//         // ==================================================
 
-        const orderStatus =
-            "Confirmed";
+//         const orderStatus =
+//             "Confirmed";
 
 
-        // ==================================================
-        // 12. CUSTOMER DETAILS
-        // ==================================================
+//         // ==================================================
+//         // 12. CUSTOMER DETAILS
+//         // ==================================================
 
-        let finalCustomerDetails =
-            customerDetails || {};
+//         let finalCustomerDetails =
+//             customerDetails || {};
 
 
-        if (user) {
+//         if (user) {
 
-            finalCustomerDetails = {
+//             finalCustomerDetails = {
 
-                name:
-                    customerDetails?.name ||
-                    user.name ||
-                    "",
+//                 name:
+//                     customerDetails?.name ||
+//                     user.name ||
+//                     "",
 
-                phone:
-                    customerDetails?.phone ||
-                    user.phone ||
-                    "",
+//                 phone:
+//                     customerDetails?.phone ||
+//                     user.phone ||
+//                     "",
 
-                email:
-                    customerDetails?.email ||
-                    user.email ||
-                    ""
-            };
-        }
+//                 email:
+//                     customerDetails?.email ||
+//                     user.email ||
+//                     ""
+//             };
+//         }
 
 
-        // ==================================================
-        // 13. CREATE ORDER
-        // ==================================================
+//         // ==================================================
+//         // 13. CREATE ORDER
+//         // ==================================================
 
-        const order =
-            new Order({
+//         const order =
+//             new Order({
 
-                orderNumber,
+//                 orderNumber,
 
-                invoiceNumber,
+//                 invoiceNumber,
 
-                orderSource,
+//                 orderSource,
 
-                branch:
-                    branch || null,
+//                 branch:
+//                     branch || null,
 
-                subBranch:
-                    subBranch || null,
+//                 subBranch:
+//                     subBranch || null,
 
-                createdBy:
-                    createdBy || null,
+//                 createdBy:
+//                     createdBy || null,
 
-                user:
-                    user?._id || null,
+//                 user:
+//                     user?._id || null,
 
-                customerDetails:
-                    finalCustomerDetails,
+//                 customerDetails:
+//                     finalCustomerDetails,
 
-                items:
-                    orderItems,
+//                 items:
+//                     orderItems,
 
-                address:
-                    address?._id || null,
+//                 address:
+//                     address?._id || null,
 
-                addressSnapshot,
+//                 addressSnapshot,
 
-                paymentMethod,
+//                 paymentMethod,
 
-                paymentStatus,
+//                 paymentStatus,
 
-                subTotal,
+//                 subTotal,
 
-                discountAmount:
-                    totalDiscount,
+//                 discountAmount:
+//                     totalDiscount,
 
-                couponCode,
+//                 couponCode,
 
-                shippingCharge:
-                    Number(shippingCharge) || 0,
+//                 shippingCharge:
+//                     Number(shippingCharge) || 0,
 
-                gstAmount:
-                    totalGst,
+//                 gstAmount:
+//                     totalGst,
 
-                totalAmount:
-                    finalTotal,
+//                 totalAmount:
+//                     finalTotal,
 
-                orderStatus,
+//                 orderStatus,
 
-                billingStatus:
-                    "Completed",
+//                 billingStatus:
+//                     "Completed",
 
-                statusHistory: [{
+//                 statusHistory: [{
 
-                    status:
-                        orderStatus,
+//                     status:
+//                         orderStatus,
 
-                    updatedBy:
-                        createdBy || null,
+//                     updatedBy:
+//                         createdBy || null,
 
-                    remarks:
-                        "Order created",
+//                     remarks:
+//                         "Order created",
 
-                    updatedAt:
-                        new Date()
-                }],
+//                     updatedAt:
+//                         new Date()
+//                 }],
 
-                invoiceDate:
-                    new Date(),
+//                 invoiceDate:
+//                     new Date(),
 
-                stockUpdated:
-                    true,
-                razorpayOrderId: razorpayOrderId || null,
-                razorpayPaymentId: razorpayPaymentId || null,
-                paymentHistory: razorpayPaymentId
-                    ? [{
-                        method: "ONLINE",
-                        amount: finalTotal,
-                        transactionId: razorpayPaymentId,
-                        paymentGateway: "Razorpay",
-                        paidAt: new Date()
-                    }]
-                    : [],
+//                 stockUpdated:
+//                     true,
+//                 razorpayOrderId: razorpayOrderId || null,
+//                 razorpayPaymentId: razorpayPaymentId || null,
+//                 paymentHistory: razorpayPaymentId
+//                     ? [{
+//                         method: "ONLINE",
+//                         amount: finalTotal,
+//                         transactionId: razorpayPaymentId,
+//                         paymentGateway: "Razorpay",
+//                         paidAt: new Date()
+//                     }]
+//                     : [],
 
-            });
+//             });
 
 
-        await order.save({
-            session
-        });
+//         await order.save({
+//             session
+//         });
 
 
-        // ==================================================
-        // 14. COMMIT TRANSACTION
-        // ==================================================
+//         // ==================================================
+//         // 14. COMMIT TRANSACTION
+//         // ==================================================
 
-        await session.commitTransaction();
+//         await session.commitTransaction();
 
-        session.endSession();
+//         session.endSession();
 
 
-        // ==================================================
-        // 15. SEND INVOICE EMAIL
-        // ==================================================
-        // Email fail ayina order rollback avvakudadhu.
-        // Order already successfully created.
+//         // ==================================================
+//         // 15. SEND INVOICE EMAIL
+//         // ==================================================
+//         // Email fail ayina order rollback avvakudadhu.
+//         // Order already successfully created.
 
-        if (
-            user?.email &&
-            orderSource === "ONLINE"
-        ) {
+//         if (
+//             user?.email &&
+//             orderSource === "ONLINE"
+//         ) {
 
-            try {
+//             try {
 
-                await sendInvoiceEmail(
-                    user.email,
-                    order
-                );
+//                 await sendInvoiceEmail(
+//                     user.email,
+//                     order
+//                 );
 
-            } catch (emailError) {
+//             } catch (emailError) {
 
-                console.error(
-                    "Invoice email failed:",
-                    emailError.message
-                );
-            }
-        }
+//                 console.error(
+//                     "Invoice email failed:",
+//                     emailError.message
+//                 );
+//             }
+//         }
 
 
-        // ==================================================
-        // 16. RESPONSE
-        // ==================================================
+//         // ==================================================
+//         // 16. RESPONSE
+//         // ==================================================
 
-        return res.status(201).json({
+//         return res.status(201).json({
 
-            success: true,
+//             success: true,
 
-            message:
-                "Order created successfully",
+//             message:
+//                 "Order created successfully",
 
-            data:
-                order
+//             data:
+//                 order
 
-        });
+//         });
 
 
-    } catch (error) {
+//     } catch (error) {
 
-        // ==================================================
-        // ROLLBACK
-        // ==================================================
+//         // ==================================================
+//         // ROLLBACK
+//         // ==================================================
 
-        await session.abortTransaction();
+//         await session.abortTransaction();
 
-        session.endSession();
+//         session.endSession();
 
 
-        console.error(
-            "Create Order Error:",
-            error
-        );
+//         console.error(
+//             "Create Order Error:",
+//             error
+//         );
 
 
-        return res.status(400).json({
+//         return res.status(400).json({
 
-            success: false,
+//             success: false,
 
-            message:
-                error.message ||
-                "Failed to create order"
+//             message:
+//                 error.message ||
+//                 "Failed to create order"
 
-        });
-    }
-};
+//         });
+//     }
+// };
 
 
 
