@@ -467,7 +467,7 @@ exports.getUserSchemeById = async (req, res) => {
                 user: userId
             })
             .populate("scheme")
-            .populate("user", "-password");
+            .populate("user", "-password -token");
 
         if (!userScheme) {
 

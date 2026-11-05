@@ -58,11 +58,11 @@ const paymentSchema = new mongoose.Schema({
       "CASH",
       "UPI",
       "CARD",
-      "NETBANKING"
+      "NETBANKING",
+      "ONLINE"
     ],
     required: true
   },
-
   // ==========================
   // PAYMENT GATEWAY
   // ==========================

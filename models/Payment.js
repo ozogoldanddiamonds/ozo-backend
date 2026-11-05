@@ -58,7 +58,8 @@ const paymentSchema = new mongoose.Schema({
       "CASH",
       "UPI",
       "CARD",
-      "NETBANKING"
+      "NETBANKING",
+      "ONLINE"
     ],
     required: true
   },
@@ -124,6 +125,25 @@ const paymentSchema = new mongoose.Schema({
   {
     timestamps: true
   });
+// One paid record per subscription installment
+paymentSchema.index(
+  { subscription: 1, monthNo: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: "PAID"
+    }
+  }
+);
+
+// Prevent duplicate Razorpay payment IDs
+paymentSchema.index(
+  { gatewayPaymentId: 1 },
+  {
+    unique: true,
+    sparse: true
+  }
+);
 
 module.exports =
   mongoose.model(

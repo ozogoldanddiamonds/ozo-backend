@@ -30,7 +30,7 @@ const { createEmployee, getAllEmployees, getEmployeeById, updateEmployee, update
 const { assignProductToSubBranch, getAssignedProducts, returnAssignedProduct, assignMultipleProducts, getAssignedProductsBySubBranch } = require("../controllers/assignProduct-subbranch");
 const { createScheme, getAllSchemes, getSchemeById, updateScheme, deleteScheme, updateSchemeStatus } = require("../controllers/scheme.controller");
 const { createUserScheme, getAllUserSchemes, getUserSchemeByUserId, updateUserScheme, deleteUserScheme, getUserSchemeById } = require("../controllers/userscheme.controller");
-const { createPayment, getAllPayments, getPaymentById, updatePayment, deletePayment, getUserPayments, getPaymentHistory } = require("../controllers/schema-payment.controller");
+const { createSchemeRazorpayOrder, verifySchemeRazorpayPayment, createPayment, getAllPayments, getPaymentById, updatePayment, deletePayment, getUserPayments, getPaymentHistory } = require("../controllers/schema-payment.controller");
 const { createBrand, getAllBrands, getActiveBrands, getBrandById, updateBrand, deleteBrand } = require("../controllers/brand.controller");
 
 // const router = express.Router();
@@ -369,6 +369,11 @@ router.put("/update-user-scheme/:id", updateUserScheme);
 router.delete("/delete-user-scheme/:id", deleteUserScheme);
 router.get("/get-user-scheme/:userId/:userSchemeId", getUserSchemeById);
 
+
+
+
+router.post("/create-scheme-razorpay-order", verifyToken, createSchemeRazorpayOrder);
+router.post("/verify-scheme-razorpay-payment", verifyToken, verifySchemeRazorpayPayment);
 router.post("/create-payment", createPayment);
 router.get("/get-all-payments", getAllPayments);
 router.get("/get-payment/:id", getPaymentById);
