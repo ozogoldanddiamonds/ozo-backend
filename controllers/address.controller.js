@@ -128,89 +128,79 @@ exports.getAllAddresses =
 /*
 UPDATE ADDRESS
 */
-exports.updateAddress =
-  async (req, res) => {
-    try {
-      const {
-        fullName,
-        phone,
-        addressLine1,
-        addressLine2,
-        city,
-        state,
-        pincode,
-        country,
-        isDefault
-      } = req.body || {};
+exports.updateAddress = async (req, res) => {
+  try {
 
-      const address =
-        await Address.findById(
-          req.params.id
-        );
+    const userId = req.user?.userId;
+    const addressId = req.params.id;
 
-      if (!address) {
-        return res.status(404).json({
-          success: false,
-          message:
-            "Address not found"
-        });
-      }
-
-      if (isDefault === true) {
-        await Address.updateMany(
-          {
-            user: address.user
-          },
-          {
-            isDefault: false
-          }
-        );
-      }
-
-      address.fullName =
-        fullName;
-
-      address.phone =
-        phone;
-
-      address.addressLine1 =
-        addressLine1;
-
-      address.addressLine2 =
-        addressLine2;
-
-      address.city =
-        city;
-
-      address.state =
-        state;
-
-      address.pincode =
-        pincode;
-
-      address.country =
-        country;
-
-      address.isDefault =
-        isDefault;
-
-      await address.save();
-
-      res.status(200).json({
-        success: true,
-        message:
-          "Address updated successfully",
-        data: address
-      });
-
-    } catch (error) {
-      res.status(500).json({
+    if (!userId) {
+      return res.status(401).json({
         success: false,
-        message:
-          error.message
+        message: "Unauthorized user"
       });
     }
-  };
+
+    const {
+      fullName,
+      phone,
+      addressLine1,
+      addressLine2,
+      landmark,
+      city,
+      state,
+      pincode,
+      country,
+      isDefault
+    } = req.body || {};
+
+    const address = await Address.findOne({
+      _id: addressId,
+      user: userId
+    });
+
+    if (!address) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found"
+      });
+    }
+
+    if (isDefault === true) {
+      await Address.updateMany(
+        { user: userId },
+        { $set: { isDefault: false } }
+      );
+    }
+
+    address.fullName = fullName;
+    address.phone = phone;
+    address.addressLine1 = addressLine1;
+    address.addressLine2 = addressLine2;
+    address.landmark = landmark;
+    address.city = city;
+    address.state = state;
+    address.pincode = pincode;
+    address.country = country;
+    address.isDefault = isDefault === true;
+
+    await address.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Address updated successfully",
+      data: address
+    });
+
+  } catch (error) {
+    console.error("Update Address Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
 
 exports.deleteAddress =
   async (req, res) => {

@@ -148,7 +148,7 @@ router.delete("/wishlist/:wishlistId/item/:itemId", removeWishlistItem);
 router.post("/Createaddress", createAddress);
 router.get("/address/:userId", getAddresses);
 router.get("/addressbyid/:id", getAddressById);
-router.put("/updateaddress/:id", updateAddress);
+router.put("/updateaddress/:id", verifyToken, updateAddress);
 router.delete("/Deleteaddress/:id", deleteAddress);
 router.get("/getAllAddress", getAllAddresses);
 router.post("/setDefaultAddress/:id", setDefaultAddress);
