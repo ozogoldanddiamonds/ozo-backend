@@ -849,3 +849,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWIyM
   "quantity": 1,
   "addressId": "6acb534b398972e13ad02edf"
 }
+
+
+###
+GET http://localhost:3001/api/getUserById/6ab2246251309277f68d8805
+Content-Type: application/json
+

@@ -1,14 +1,11 @@
 const User = require("../models/user-login");
 const bcrypt = require("bcrypt");
+const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const Cart = require("../models/cart");
 const Wishlist = require("../models/wishlist");
 const Order = require("../models/order");
-const {
-  transporter
-} = require(
-  "../middleware/mail"
-);
+const { transporter } = require("../middleware/mail");
 const { OAuth2Client } = require("google-auth-library");
 
 const googleClient = new OAuth2Client(
@@ -757,4 +754,130 @@ exports.googleLogin = async (req, res) => {
 
   }
 
+};
+
+exports.updateProfile = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Validate User ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid User ID"
+      });
+    }
+
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      gender,
+      dateOfBirth,
+      anniversaryDate,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      pincode,
+      country
+    } = req.body;
+
+    // Prepare Update Data
+    const updateData = {
+      name: fullName,
+      phone: mobileNumber,
+      email: email,
+      gender: gender,
+      dateOfBirth: dateOfBirth || null,
+      anniversaryDate: anniversaryDate || null,
+      addressLine1: addressLine1,
+      addressLine2: addressLine2,
+      city: city,
+      state: state,
+      pincode: pincode,
+      country: country
+    };
+
+    // Remove undefined fields
+    Object.keys(updateData).forEach((key) => {
+      if (updateData[key] === undefined) {
+        delete updateData[key];
+      }
+    });
+
+    // Update User
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: updateData
+      },
+      {
+        new: true,
+        runValidators: true
+      }
+    ).select("-password -token -OTP");
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      data: updatedUser
+    });
+
+  } catch (error) {
+    console.error("Update Profile Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
+
+};
+
+// GET USER BY ID
+exports.getUserById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid User ID"
+      });
+    }
+
+    const user = await User.findById(userId)
+      .select("-password -token -OTP -OTPExpires -newPhone -newEmail");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User details fetched successfully",
+      data: user
+    });
+
+  } catch (error) {
+    console.error("Get User By ID Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
 };
