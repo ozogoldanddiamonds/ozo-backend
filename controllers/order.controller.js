@@ -157,12 +157,33 @@ exports.createRazorpayOrder = async (req, res) => {
                 });
             }
 
-            totalAmount += unitPrice * item.quantity;
+            const finalUnitPrice = Number(unitPrice.toFixed(2));
+            const itemTotalPrice = Number(
+                (finalUnitPrice * item.quantity).toFixed(2)
+            );
+
+            totalAmount += itemTotalPrice;
 
             paymentAttemptItems.push({
                 product: product._id,
                 variantId: variant._id.toString(),
-                quantity: item.quantity
+                quantity: item.quantity,
+
+                // New schema fields
+                productSnapshot: product.toObject({
+                    depopulate: true,
+                    versionKey: false
+                }),
+
+                variantSnapshot: variant.toObject({
+                    depopulate: true,
+                    versionKey: false
+                }),
+
+                pricingSnapshot: priceDetails,
+
+                unitPrice: finalUnitPrice,
+                totalPrice: itemTotalPrice
             });
         }
 
@@ -445,7 +466,16 @@ exports.verifyRazorpayPayment = async (req, res) => {
                 orderItems = attempt.items.map(item => ({
                     product: item.product,
                     variant: item.variantId,
-                    quantity: item.quantity
+                    quantity: item.quantity,
+
+                    // PaymentAttempt snapshots
+                    productSnapshot: item.productSnapshot,
+                    variantSnapshot: item.variantSnapshot,
+                    pricingSnapshot: item.pricingSnapshot,
+
+                    // Saved prices
+                    unitPrice: item.unitPrice,
+                    totalPrice: item.totalPrice
                 }));
             } else if (
                 attempt.product &&
@@ -489,7 +519,8 @@ exports.verifyRazorpayPayment = async (req, res) => {
                     items: orderItems,
                     paymentMethod: "ONLINE",
                     razorpayOrderId: attempt.razorpayOrderId,
-                    razorpayPaymentId: razorpay_payment_id
+                    razorpayPaymentId: razorpay_payment_id,
+                    paymentAttemptId: attempt._id
                 }
             };
 
@@ -636,6 +667,7 @@ exports.createOrder = async (req, res) => {
             paymentMethod,
             razorpayOrderId,
             razorpayPaymentId,
+            paymentAttemptId,
             branch,
             subBranch,
             createdBy,
@@ -725,7 +757,31 @@ exports.createOrder = async (req, res) => {
                 throw new Error("Address not found");
             }
         }
+        let paymentAttempt = null;
 
+        if (orderSource === "ONLINE") {
+
+            if (!paymentAttemptId) {
+                throw new Error("Payment attempt ID is required");
+            }
+
+            paymentAttempt = await PaymentAttempt.findOne({
+                _id: paymentAttemptId,
+                user: userId,
+                razorpayOrderId,
+                razorpayPaymentId,
+                status: "PAID"
+            }).session(session);
+
+            if (!paymentAttempt) {
+                throw new Error("Valid paid payment attempt not found");
+            }
+
+            if (Math.round(Number(paymentAttempt.amount) * 100) !==
+                Math.round(Number(paymentAttempt.amount) * 100)) {
+                throw new Error("Payment amount mismatch");
+            }
+        }
         // ==================================================
         // 4. BRANCH / SUB-BRANCH VALIDATION
         // ==================================================
@@ -851,17 +907,49 @@ exports.createOrder = async (req, res) => {
                 );
             }
 
-            // Calculate price.
-            const priceDetails = await calculateVariantPrice(variant);
+            let priceDetails;
+            let unitPrice;
+            let totalPrice;
 
-            if (!priceDetails) {
-                throw new Error(
-                    `Unable to calculate price for ${product.name}`
+            if (orderSource === "ONLINE") {
+
+                const savedItem = paymentAttempt.items?.find(
+                    p =>
+                        p.product.toString() === product._id.toString() &&
+                        p.variantId === variant._id.toString()
                 );
-            }
 
-            const unitPrice = Number(priceDetails.finalPrice) || 0;
-            const totalPrice = unitPrice * quantity;
+                if (!savedItem) {
+                    throw new Error("Payment item snapshot not found");
+                }
+
+                if (
+                    Number(savedItem.quantity) !== quantity ||
+                    !Number.isFinite(Number(savedItem.unitPrice)) ||
+                    !Number.isFinite(Number(savedItem.totalPrice)) ||
+                    Number(savedItem.unitPrice) <= 0 ||
+                    Number(savedItem.totalPrice) <= 0
+                ) {
+                    throw new Error("Invalid payment item pricing");
+                }
+
+                priceDetails = savedItem.pricingSnapshot;
+                unitPrice = Number(savedItem.unitPrice);
+                totalPrice = Number(savedItem.totalPrice);
+
+            } else {
+
+                priceDetails = await calculateVariantPrice(variant);
+
+                if (!priceDetails) {
+                    throw new Error(
+                        `Unable to calculate price for ${product.name}`
+                    );
+                }
+
+                unitPrice = Number(priceDetails.finalPrice) || 0;
+                totalPrice = unitPrice * quantity;
+            }
 
             // Stone weight.
             const stoneWeight = variant.stones?.reduce(
@@ -880,7 +968,16 @@ exports.createOrder = async (req, res) => {
                 ) || 0;
 
             // Product snapshot.
-            const productSnapshot = {
+            // Product snapshot.
+            const savedItem = orderSource === "ONLINE"
+                ? paymentAttempt.items.find(
+                    p =>
+                        p.product.toString() === product._id.toString() &&
+                        p.variantId === variant._id.toString()
+                )
+                : null;
+
+            const productSnapshot = savedItem?.productSnapshot || {
                 name: product.name,
                 slug: product.slug,
                 image: product.images?.[0] || null,
@@ -890,7 +987,6 @@ exports.createOrder = async (req, res) => {
                 productType: product.productType,
                 brand: product.brand || ""
             };
-
             // Stones snapshot.
             const stonesSnapshot = variant.stones?.map(stone => ({
                 stoneType: stone.stoneType,
@@ -902,7 +998,7 @@ exports.createOrder = async (req, res) => {
             })) || [];
 
             // Variant snapshot.
-            const variantSnapshot = {
+            const variantSnapshot = savedItem?.variantSnapshot || {
                 sku: variant.sku,
                 metalType: variant.metalType,
                 purity: variant.metalPurity,
@@ -922,7 +1018,7 @@ exports.createOrder = async (req, res) => {
             };
 
             // Pricing snapshot.
-            const pricingSnapshot = {
+            const pricingSnapshot = savedItem?.pricingSnapshot || {
                 goldRate: Number(priceDetails.goldRate) || 0,
                 goldValue: Number(priceDetails.goldValue) || 0,
                 wastageAmount: Number(priceDetails.wastageAmount) || 0,
@@ -955,7 +1051,15 @@ exports.createOrder = async (req, res) => {
                 })
                 .sort({ createdAt: 1 })
                 .session(session);
+            console.log("PRODUCT ID:", product._id.toString());
+            console.log("VARIANT ID:", variant._id.toString());
+            console.log("ORDER QUANTITY:", quantity);
 
+            console.log("SUPPLIER ITEMS:", supplierItems.map(item => ({
+                product: item.product?.toString(),
+                variantId: item.variantId?.toString(),
+                availableQuantity: item.availableQuantity
+            })));
             for (const supplierItem of supplierItems) {
                 if (remainingQuantity <= 0) {
                     break;

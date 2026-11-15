@@ -18,11 +18,37 @@ const paymentAttemptItemSchema = new mongoose.Schema(
             type: Number,
             required: true,
             min: 1
+        },
+
+        productSnapshot: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {}
+        },
+
+        variantSnapshot: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {}
+        },
+
+        pricingSnapshot: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {}
+        },
+
+        unitPrice: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+
+        totalPrice: {
+            type: Number,
+            required: true,
+            min: 0
         }
     },
     { _id: false }
 );
-
 const paymentAttemptSchema = new mongoose.Schema(
     {
         user: {

@@ -31,7 +31,15 @@ const UserSchema = new mongoose.Schema({
   newEmail: { type: String },
   OTP: { type: String },
   isVerified: { type: Boolean, default: false },
-  OTPExpires: { type: Date }
+  OTPExpires: { type: Date },
+  refreshTokenHash: {
+    type: String,
+    default: null
+  },
+  refreshTokenExpiresAt: {
+    type: Date,
+    default: null
+  }
 });
 
 module.exports =

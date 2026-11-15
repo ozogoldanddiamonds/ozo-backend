@@ -157,7 +157,7 @@ exports.createMakerProductionItem = async (req, res) => {
             await MakerProductionItem.findOne({
                 production: production,
                 product: product,
-                variantId: variantId
+                variantId: selectedVariant._id,
             });
 
 

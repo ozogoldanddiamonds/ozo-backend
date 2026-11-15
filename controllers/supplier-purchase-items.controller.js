@@ -113,8 +113,11 @@ exports.createSupplierPurchaseItem = async (req, res) => {
         const existingItem = await SupplierPurchaseItem.findOne({
             purchase: purchase,
             product: product,
-            variantId: variantId
+            variantId: selectedVariant._id
         });
+        console.log("SUPPLIER PURCHASE PRODUCT:", existingProduct._id.toString());
+        console.log("REQUEST VARIANT ID:", variantId);
+        console.log("SELECTED VARIANT ID:", selectedVariant._id.toString());
 
         if (existingItem) {
             return res.status(400).json({
@@ -134,7 +137,7 @@ exports.createSupplierPurchaseItem = async (req, res) => {
 
             product: product,
 
-            variantId: variantId,
+            variantId: selectedVariant._id,
 
             quantity: purchaseQuantity,
 

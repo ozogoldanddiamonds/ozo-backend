@@ -855,3 +855,34 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWIyM
 GET http://localhost:3001/api/getUserById/6ab2246251309277f68d8805
 Content-Type: application/json
 
+
+
+### 
+POST http://localhost:3001/api/send-otp
+Content-Type: application/json
+ 
+ {
+  "phone": "8978971154"
+}
+
+
+###
+GET https://multichannel.buddyinfotech.in/api/v1/sms/templates
+Authorization: Bearer 387|K5Jt9hZG27EqL7JWY0JLnbHtP7yoabGX8oLN9e9r064c1cfc
+Content-Type: application/json
+
+###
+GET https://multichannel.buddyinfotech.in/api/v1/sms/reports/API-5442db24-f779-496f-a718-ca30befd6295
+Authorization: Bearer 387|K5Jt9hZG27EqL7JWY0JLnbHtP7yoabGX8oLN9e9r064c1cfc
+Content-Type: application/json
+
+
+### 
+POST http://localhost:3001/api/verify-otp
+Content-Type: application/json
+ 
+ {
+  "phone": "8978971154",
+  "otp":"125997"
+}
+

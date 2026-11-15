@@ -12,6 +12,7 @@ const { createCategory, getAllCategories, getCategoryById, updateCategory, delet
 const { getSubCategoryByCategory, createSubCategory, getAllSubCategories, getSubCategoryById, updateSubCategory, deleteSubCategory } = require("../controllers/subcategory.controller");
 const { getSubSubCategoryBySubCategory, createSubSubCategory, getAllSubSubCategories, getSubSubCategoryById, updateSubSubCategory, deleteSubSubCategory } = require("../controllers/subsubcategory.controller");
 const { createProduct, getAllProducts, getAllProductsWithPagination, getProductsByType, getProductById, updateProduct, deleteProduct, getProductsByCategory, getProductsByCategoryId, changeProductStatus } = require("../controllers/product.controller");
+const { sendUserOtp, verifyUserOtp, resendUserOtp, refreshUserToken, logoutUser } = require("../controllers/user-otp-controller");
 const { getAllUsers, getUsersCount, getProfileSummary, userLogout, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword, googleLogin, updateProfile, getUserById } = require("../controllers/userlogin.controller");
 const { addToCart, getCart, updateCartItem, removeCartItem, clearCart } = require("../controllers/cart.controller");
 const { addToWishlist, getWishlist, removeWishlistItem } = require("../controllers/wishlist.controller");
@@ -49,6 +50,8 @@ const { createMakerProductionItem, getAllMakerProductionItems, getProductionItem
 
 const { createCustomDesignRequest, getMyCustomDesignRequests, getMyCustomDesignRequestById, cancelMyCustomDesignRequest, getAllCustomDesignRequests, getCustomDesignRequestById, updateCustomDesignRequestStatus, updateCustomDesignRequestNotes, deleteCustomDesignRequest, updateMyCustomDesignRequest } = require("../controllers/custom-design.controller");
 const { getMetaKeyWord, upsertMetaKeyWordsSEO, getMetaKeywordsSEOById } = require("../controllers/meta-key-words.controller");
+
+
 
 
 router.post("/create-contact", createContact);
@@ -121,6 +124,12 @@ router.post("/upload-certificate", upload.single("file"), uploadCertificate);
 // router.post("/createProduct",upload.array("images", 10),createProduct);
 // router.get("/getAllProducts",getAllProducts);
 // router.put("/UpdateProduct/:id",upload.array("images", 10),updateProduct);
+router.post("/send-otp", sendUserOtp);
+router.post("/verify-otp", verifyUserOtp);
+router.post("/resend-otp", resendUserOtp);
+router.post("/refresh-token", refreshUserToken);
+router.post("/logout", verifyToken, logoutUser);
+
 
 router.post("/userregister", Userregister);
 router.post("/userlogin", userLogin);
