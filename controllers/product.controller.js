@@ -2578,9 +2578,20 @@ exports.getProductsByCategory = async (req, res) => {
           })
         );
 
+        const totalStock = variants.reduce(
+          (total, variant) => total + Number(variant.stock || 0),
+          0
+        );
+
+        const inStock = variants.some(
+          variant => Number(variant.stock || 0) > 0
+        );
+
         return {
           ...product,
-          variants
+          variants,
+          totalStock,
+          inStock
         };
       })
     );
@@ -2590,31 +2601,21 @@ exports.getProductsByCategory = async (req, res) => {
     // =========================
 
     const getComparablePrice = (product) => {
-      let variants = product.variants || [];
-
-      // If purity is selected, consider only matching variants
-      // Filter products by selected metal purity
-      if (metalPurity && metalPurity.trim() !== "") {
-        updatedProducts = updatedProducts.filter((product) =>
-          (product.variants || []).some(
-            (variant) =>
-              String(variant.metalPurity || "").trim().toUpperCase() ===
-              String(metalPurity).trim().toUpperCase()
-          )
-        );
-      }
+      const variants = product.variants || [];
 
       const prices = variants
-        .map((variant) =>
-          Number(variant.priceDetails?.finalPrice)
-        )
-        .filter(
-          (price) => Number.isFinite(price) && price > 0
-        );
+        .filter(variant => {
+          if (!metalPurity || !metalPurity.trim()) return true;
 
-      return prices.length > 0
-        ? Math.min(...prices)
-        : null;
+          return (
+            String(variant.metalPurity || "").trim().toUpperCase() ===
+            String(metalPurity).trim().toUpperCase()
+          );
+        })
+        .map(variant => Number(variant.priceDetails?.finalPrice))
+        .filter(price => Number.isFinite(price) && price > 0);
+
+      return prices.length > 0 ? Math.min(...prices) : null;
     };
 
     // =========================

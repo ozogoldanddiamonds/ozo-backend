@@ -9,214 +9,351 @@ exports.createUserScheme = async (req, res) => {
 
     try {
 
-        const {
-
-            user,
-
-            scheme
-
-        } = req.body;
+        const { user, scheme } = req.body;
 
         // ==========================
         // VALIDATION
         // ==========================
 
         if (!user || !scheme) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "User and Scheme are required"
-
+                message: "User and Scheme are required"
             });
+        }
 
+        if (
+            !require("mongoose").Types.ObjectId.isValid(user) ||
+            !require("mongoose").Types.ObjectId.isValid(scheme)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid User or Scheme ID"
+            });
         }
 
         // ==========================
         // GET SCHEME
         // ==========================
 
-        const schemeData =
-
-            await Scheme.findById(scheme);
+        const schemeData = await Scheme.findById(scheme);
 
         if (!schemeData) {
-
             return res.status(404).json({
-
                 success: false,
-
-                message:
-                    "Scheme not found"
-
+                message: "Scheme not found"
             });
-
         }
 
         if (!schemeData.isActive) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    "Scheme is inactive"
-
+                message: "Scheme is inactive"
             });
-
-        }
-
-        // ==========================
-        // CHECK SAME SCHEME ALREADY SUBSCRIBED
-        // ==========================
-
-        const existingScheme =
-
-            await UserScheme.findOne({
-
-                user,
-
-                scheme,
-
-                status: {
-                    $in: [
-                        "ACTIVE",
-                        "MATURED"
-                    ]
-                }
-
-            });
-
-        if (existingScheme) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "You have already subscribed to this scheme."
-
-            });
-
         }
 
         // ==========================
         // DATES
         // ==========================
 
-        const startDate =
-            new Date();
+        const startDate = new Date();
 
-        const nextDueDate =
-            new Date(startDate);
+        const nextDueDate = new Date(startDate);
+        nextDueDate.setMonth(nextDueDate.getMonth() + 1);
 
-        nextDueDate.setMonth(
-
-            nextDueDate.getMonth() + 1
-
-        );
-
-        const maturityDate =
-            new Date(startDate);
-
+        const maturityDate = new Date(startDate);
         maturityDate.setMonth(
-
-            maturityDate.getMonth() +
-
-            schemeData.durationMonths
-
+            maturityDate.getMonth() + schemeData.durationMonths
         );
 
         // ==========================
         // CREATE USER SCHEME
+        // Multiple subscriptions allowed
         // ==========================
 
-        const userScheme =
+        const userScheme = await UserScheme.create({
 
-            await UserScheme.create({
+            user,
 
-                user,
+            scheme,
 
-                scheme,
+            schemeName: schemeData.name,
 
-                schemeName:
-                    schemeData.name,
+            schemeAmount: schemeData.amount,
 
-                schemeAmount:
-                    schemeData.amount,
+            monthlyAmount: schemeData.monthlyAmount,
 
-                monthlyAmount:
-                    schemeData.monthlyAmount,
+            durationMonths: schemeData.durationMonths,
 
-                durationMonths:
-                    schemeData.durationMonths,
+            userPayMonths: schemeData.userPayMonths,
 
-                userPayMonths:
-                    schemeData.userPayMonths,
+            companyPayMonths: schemeData.companyPayMonths,
 
-                companyPayMonths:
-                    schemeData.companyPayMonths,
+            startDate,
 
-                startDate,
+            nextDueDate,
 
-                nextDueDate,
+            maturityDate,
 
-                maturityDate,
+            totalInstallments: schemeData.userPayMonths,
 
-                totalInstallments:
-                    schemeData.userPayMonths,
+            paidInstallments: 0,
 
-                paidInstallments: 0,
+            remainingInstallments: schemeData.userPayMonths,
 
-                remainingInstallments:
-                    schemeData.userPayMonths,
+            totalPaidAmount: 0,
 
-                totalPaidAmount: 0,
+            companyContribution: 0,
 
-                companyContribution: 0,
+            remarks: "",
 
-                remarks: "",
+            status: "ACTIVE"
 
-                status: "ACTIVE"
-
-            });
+        });
 
         // ==========================
         // RESPONSE
         // ==========================
 
-        res.status(201).json({
+        return res.status(201).json({
 
             success: true,
 
-            message:
-                "Scheme subscribed successfully",
+            message: "Scheme subscribed successfully",
 
-            data:
-                userScheme
+            data: userScheme
 
         });
 
     }
-
     catch (error) {
 
-        console.log(error);
+        console.log("Create User Scheme Error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
-            message:
-                error.message
+            message: error.message
 
         });
 
     }
 
 };
+
+// exports.createUserScheme = async (req, res) => {
+
+//     try {
+
+//         const {
+
+//             user,
+
+//             scheme
+
+//         } = req.body;
+
+//         // ==========================
+//         // VALIDATION
+//         // ==========================
+
+//         if (!user || !scheme) {
+
+//             return res.status(400).json({
+
+//                 success: false,
+
+//                 message:
+//                     "User and Scheme are required"
+
+//             });
+
+//         }
+
+//         // ==========================
+//         // GET SCHEME
+//         // ==========================
+
+//         const schemeData =
+
+//             await Scheme.findById(scheme);
+
+//         if (!schemeData) {
+
+//             return res.status(404).json({
+
+//                 success: false,
+
+//                 message:
+//                     "Scheme not found"
+
+//             });
+
+//         }
+
+//         if (!schemeData.isActive) {
+
+//             return res.status(400).json({
+
+//                 success: false,
+
+//                 message:
+//                     "Scheme is inactive"
+
+//             });
+
+//         }
+
+//         // ==========================
+//         // CHECK SAME SCHEME ALREADY SUBSCRIBED
+//         // ==========================
+
+//         const existingScheme =
+
+//             await UserScheme.findOne({
+
+//                 user,
+
+//                 scheme,
+
+//                 status: {
+//                     $in: [
+//                         "ACTIVE",
+//                         "MATURED"
+//                     ]
+//                 }
+
+//             });
+
+//         if (existingScheme) {
+
+//             return res.status(400).json({
+
+//                 success: false,
+
+//                 message:
+//                     "You have already subscribed to this scheme."
+
+//             });
+
+//         }
+
+//         // ==========================
+//         // DATES
+//         // ==========================
+
+//         const startDate =
+//             new Date();
+
+//         const nextDueDate =
+//             new Date(startDate);
+
+//         nextDueDate.setMonth(
+
+//             nextDueDate.getMonth() + 1
+
+//         );
+
+//         const maturityDate =
+//             new Date(startDate);
+
+//         maturityDate.setMonth(
+
+//             maturityDate.getMonth() +
+
+//             schemeData.durationMonths
+
+//         );
+
+//         // ==========================
+//         // CREATE USER SCHEME
+//         // ==========================
+
+//         const userScheme =
+
+//             await UserScheme.create({
+
+//                 user,
+
+//                 scheme,
+
+//                 schemeName:
+//                     schemeData.name,
+
+//                 schemeAmount:
+//                     schemeData.amount,
+
+//                 monthlyAmount:
+//                     schemeData.monthlyAmount,
+
+//                 durationMonths:
+//                     schemeData.durationMonths,
+
+//                 userPayMonths:
+//                     schemeData.userPayMonths,
+
+//                 companyPayMonths:
+//                     schemeData.companyPayMonths,
+
+//                 startDate,
+
+//                 nextDueDate,
+
+//                 maturityDate,
+
+//                 totalInstallments:
+//                     schemeData.userPayMonths,
+
+//                 paidInstallments: 0,
+
+//                 remainingInstallments:
+//                     schemeData.userPayMonths,
+
+//                 totalPaidAmount: 0,
+
+//                 companyContribution: 0,
+
+//                 remarks: "",
+
+//                 status: "ACTIVE"
+
+//             });
+
+//         // ==========================
+//         // RESPONSE
+//         // ==========================
+
+//         res.status(201).json({
+
+//             success: true,
+
+//             message:
+//                 "Scheme subscribed successfully",
+
+//             data:
+//                 userScheme
+
+//         });
+
+//     }
+
+//     catch (error) {
+
+//         console.log(error);
+
+//         res.status(500).json({
+
+//             success: false,
+
+//             message:
+//                 error.message
+
+//         });
+
+//     }
+
+// };
 
 // ============================
 // Get All User Schemes

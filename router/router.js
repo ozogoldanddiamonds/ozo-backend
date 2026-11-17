@@ -50,7 +50,7 @@ const { createMakerProductionItem, getAllMakerProductionItems, getProductionItem
 
 const { createCustomDesignRequest, getMyCustomDesignRequests, getMyCustomDesignRequestById, cancelMyCustomDesignRequest, getAllCustomDesignRequests, getCustomDesignRequestById, updateCustomDesignRequestStatus, updateCustomDesignRequestNotes, deleteCustomDesignRequest, updateMyCustomDesignRequest } = require("../controllers/custom-design.controller");
 const { getMetaKeyWord, upsertMetaKeyWordsSEO, getMetaKeywordsSEOById } = require("../controllers/meta-key-words.controller");
-
+const { verifyPickupAddress, checkDeliveryPincode, saveShipmentPackages, bookSequelShipment, getSequelShipmentTracking, trackMultipleOrders, cancelSequelShipmentOrder, downloadOrderPOD } = require("../controllers/sequel247.controller");
 
 
 
@@ -563,6 +563,14 @@ router.get("/get-meta-keyowords-seo", getMetaKeyWord);
 router.put("/update-meta-keyowords-seo", upsertMetaKeyWordsSEO, getMetaKeywordsSEOById);
 router.get("/getMetaKeywordsSEOById/:id", getMetaKeywordsSEOById);
 
+router.get("/verify-pickup", verifyToken, verifyPickupAddress);
+router.post("/check-pincode", checkDeliveryPincode);
+router.put("/orders/:id/shipment-packages", verifyToken, saveShipmentPackages);
+router.post("/orders/:id/book-shipment", verifyToken, bookSequelShipment);
+router.get("/orders/:id/track-shipment", verifyToken, getSequelShipmentTracking);
+router.post("/orders/track-shipments/bulk", verifyToken, trackMultipleOrders);
+router.post("/orders/:id/cancel-shipment", verifyToken, cancelSequelShipmentOrder);
+router.post("/orders/:id/download-pod", verifyToken, downloadOrderPOD);
 
 
 module.exports = router;

@@ -349,6 +349,117 @@ const orderSchema = new mongoose.Schema({
         }
     }],
 
+    sequelShipment: {
+        bookingStatus: {
+            type: String,
+            enum: ["NOT_BOOKED", "PENDING", "BOOKED", "FAILED", "CANCELLED"],
+            default: "NOT_BOOKED"
+        },
+
+        docketNumber: {
+            type: String,
+            default: null
+        },
+
+        brn: {
+            type: String,
+            default: null
+        },
+
+        estimatedDelivery: {
+            type: String,
+            default: null
+        },
+
+        shipmentStatus: {
+            type: String,
+            default: null
+        },
+
+        trackingLink: {
+            type: String,
+            default: null
+        },
+
+        docketPrint: {
+            type: String,
+            default: null
+        },
+        bookingAttempt: {
+            type: Number,
+            default: 0
+        },
+
+        bookingReference: {
+            type: String,
+            default: null
+        },
+        cancelReason: {
+            type: String,
+            default: null
+        },
+
+        packages: [{
+            boxNumber: String,
+            lockNumber: String,
+            length: Number,
+            breadth: Number,
+            height: Number,
+            grossWeight: Number,
+
+            // Sequel247 identifiers
+            sequelBarcode: {
+                type: String,
+                default: null
+            },
+            sequelLockNumber: {
+                type: String,
+                default: null
+            }
+        }],
+
+        bookedAt: {
+            type: Date,
+            default: null
+        },
+
+        bookingError: {
+            type: String,
+            default: null
+        },
+
+        trackingHistory: [
+            {
+                description: {
+                    type: String,
+                    default: ""
+                },
+                location: {
+                    type: String,
+                    default: ""
+                },
+                date_time: {
+                    type: String,
+                    default: ""
+                },
+                code: {
+                    type: String,
+                    default: ""
+                }
+            },
+
+        ],
+
+        lastTrackedAt: {
+            type: Date,
+            default: null
+        },
+        lastTrackedAt: {
+            type: Date,
+            default: null
+        }
+
+    },
     // ==================================================
     // DELIVERY
     // ==================================================

@@ -1,8 +1,11 @@
 
 
+const mongoose = require("mongoose");
 const CustomDesignRequest = require("../models/custom-desing-request");
 const cloudinary = require("../cloudinaryconfig");
+const Category = require("../models/category")
 const { Readable } = require("stream");
+
 
 // CREATE CUSTOM DESIGN REQUEST
 exports.createCustomDesignRequest = async (req, res) => {
@@ -412,25 +415,22 @@ exports.getAllCustomDesignRequests = async (req, res) => {
 
 
 
+// GET CUSTOM DESIGN REQUEST BY ID (ADMIN)
 exports.getCustomDesignRequestById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    // Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid request ID"
+        message: "Invalid custom design request ID"
       });
     }
 
     const request = await CustomDesignRequest.findById(id)
-      .populate(
-        "customer",
-        "firstName lastName fullName mobile alternateMobile email"
-      )
-      .populate("category", "name image")
-      .populate("subCategory", "name image")
-      .populate("subSubCategory", "name image");
+      .populate("customer", "name phone email")
+      .lean();
 
     if (!request) {
       return res.status(404).json({
@@ -441,6 +441,7 @@ exports.getCustomDesignRequestById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      message: "Custom design request fetched successfully",
       data: request
     });
 

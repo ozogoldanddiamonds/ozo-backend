@@ -1,25 +1,15 @@
 POST http://localhost:3001/api/register
 Content-Type: application/json
 
-# {
-#   "name": "Admin",
-#   "email": "admin@gmail.com",
-#   "password": "admin@123",
-#   "role": "ADMIN",
-#   "permissions": [
-#     "ADD_PRODUCT",
-#     "DELETE_PRODUCT"
-#   ]
-# }
 {
-  "name": "kphb Branch",
-  "email": "kphb@gmail.com",
-  "password": "kphb123",
-  "role": "SUB_BRANCH",
-  "contactNumber": "9876543219",
-  "address": "kphb",
-  "location": "Hyderabad",
-  "branchId":"6a3912d97c3f96315204b938"
+  "name": "Hyderabad Main Branch",
+  "email": "info@ozogoldanddiamonds.com",
+  "password": "ozo@2026",
+  "role": "BRANCH",
+  "contactNumber": "7036020999",
+  "address": "Y Junction, Hyderabad",
+  "location": "Moosapet, Hyderabad",
+  "branchId": null
 }
 
 ###
@@ -550,7 +540,7 @@ Content-Type: application/json
 }
 
 ###
-GET http://localhost:3001/api/getOrdersByUser/6ab2246251309277f68d8805
+GET http://localhost:3001/api/getOrdersByUser/6afab1a4d5cbdcfc5215d71d
 Content-Type: application/json
 
 ###
@@ -780,7 +770,7 @@ Content-Type: application/json
 }
 
 ###
-GET http://localhost:3001/api/get-payment/6a51fa0bfcc22740fabdcff2
+GET http://localhost:3001/api/get-payment/6afadc0d198a5dcfd9ea98c7
 Content-Type: application/json
 
 ###
@@ -886,3 +876,54 @@ Content-Type: application/json
   "otp":"125997"
 }
 
+
+
+###
+GET http://localhost:3001/api/verify-pickup
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODEyNTgyLCJleHAiOjE3OTQ4OTg5ODJ9.46oAqf0YI_AIjLi1xRMgVemofUlbTxABHE4LUH_nihI
+
+
+###
+POST http://localhost:3001/api/check-pincode
+Content-Type: application/json
+
+{
+  "pincode": "523002"
+}
+
+###
+GET http://localhost:3001/api/orders/6afac908d5cbdcfc5215dbe4/track-shipment
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODk2NzAzLCJleHAiOjE3OTQ5ODMxMDN9.BFZEjuNrQReuc-0Pz99axSxCw4bgqGv1k7qpIds1VG4
+
+###
+POST http://localhost:3001/api/orders/track-shipments/bulk
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODk2NzAzLCJleHAiOjE3OTQ5ODMxMDN9.BFZEjuNrQReuc-0Pz99axSxCw4bgqGv1k7qpIds1VG4
+
+{
+  "orderIds": [
+    "6afabc2ad5cbdcfc5215d9b7"
+  ]
+}
+
+###
+POST http://localhost:3001/api/orders/6afabc2ad5cbdcfc5215d9b7/cancel-shipment
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODk2NzAzLCJleHAiOjE3OTQ5ODMxMDN9.BFZEjuNrQReuc-0Pz99axSxCw4bgqGv1k7qpIds1VG4
+
+{
+  "cancelReason": "Pickup not ready"
+}
+
+
+###
+POST http://localhost:3001/api/orders/6afac908d5cbdcfc5215dbe4/download-pod
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODk2NzAzLCJleHAiOjE3OTQ5ODMxMDN9.BFZEjuNrQReuc-0Pz99axSxCw4bgqGv1k7qpIds1VG4
+
+{
+    "fromDate": "2026-11-17",
+    "toDate": "2026-11-17"
+}

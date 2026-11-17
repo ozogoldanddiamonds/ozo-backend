@@ -2907,7 +2907,10 @@ exports.getAllOrders = async (req, res) => {
                     select:
                         "name email phone"
                 })
-
+                .populate({
+                    path: "items.product",
+                    select: "name slug images"
+                })
                 // ------------------------------------------
                 // BRANCH
                 // ------------------------------------------
@@ -3388,7 +3391,10 @@ exports.getOrderById = async (req, res) => {
                 path: "createdBy",
                 select: "name email phone role"
             })
-
+            .populate({
+                path: "items.product",
+                select: "name slug images"
+            })
             // ------------------------------------------
             // ADDRESS
             // ------------------------------------------
@@ -3791,6 +3797,7 @@ exports.getOrderById = async (req, res) => {
 };
 // get order by user 
 
+
 exports.getOrdersByUser = async (req, res) => {
 
     try {
@@ -3803,13 +3810,24 @@ exports.getOrdersByUser = async (req, res) => {
 
         })
 
+            // CUSTOMER DETAILS
             .populate("user", "name phone email")
 
+            // PRODUCT DETAILS WITH IMAGES
+            .populate({
+                path: "items.product",
+                select: "name slug images variants._id variants.metalPurity"
+            })
+
+            // ADDRESS DETAILS
             .populate("address")
 
+            // STATUS UPDATED BY
             .populate("statusHistory.updatedBy", "name role")
 
+            // LATEST ORDERS FIRST
             .sort({ createdAt: -1 });
+
 
         if (!orders.length) {
 
@@ -3822,6 +3840,7 @@ exports.getOrdersByUser = async (req, res) => {
             });
 
         }
+
 
         res.status(200).json({
 
@@ -3836,6 +3855,8 @@ exports.getOrdersByUser = async (req, res) => {
     }
 
     catch (error) {
+
+        console.error("Get Orders By User Error:", error);
 
         res.status(500).json({
 
