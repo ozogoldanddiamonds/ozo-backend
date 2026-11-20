@@ -51,7 +51,7 @@ const { createMakerProductionItem, getAllMakerProductionItems, getProductionItem
 const { createCustomDesignRequest, getMyCustomDesignRequests, getMyCustomDesignRequestById, cancelMyCustomDesignRequest, getAllCustomDesignRequests, getCustomDesignRequestById, updateCustomDesignRequestStatus, updateCustomDesignRequestNotes, deleteCustomDesignRequest, updateMyCustomDesignRequest } = require("../controllers/custom-design.controller");
 const { getMetaKeyWord, upsertMetaKeyWordsSEO, getMetaKeywordsSEOById } = require("../controllers/meta-key-words.controller");
 const { verifyPickupAddress, checkDeliveryPincode, saveShipmentPackages, bookSequelShipment, getSequelShipmentTracking, trackMultipleOrders, cancelSequelShipmentOrder, downloadOrderPOD } = require("../controllers/sequel247.controller");
-
+const { fetchWhatsAppTemplates } = require("../controllers/whatsapp.controller");
 
 
 router.post("/create-contact", createContact);
@@ -572,5 +572,7 @@ router.post("/orders/track-shipments/bulk", verifyToken, trackMultipleOrders);
 router.post("/orders/:id/cancel-shipment", verifyToken, cancelSequelShipmentOrder);
 router.post("/orders/:id/download-pod", verifyToken, downloadOrderPOD);
 
+
+router.get("/whatsapp/templates", verifyToken, fetchWhatsAppTemplates);
 
 module.exports = router;

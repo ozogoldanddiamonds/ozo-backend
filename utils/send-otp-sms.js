@@ -37,17 +37,7 @@ const sendOtpSms = async (phone, otp) => {
             ]
         };
 
-        // Debug Console
-        console.log("\n========== BUDDY OTP SMS DEBUG ==========");
-        console.log("Phone Number:", phone);
-        console.log("Generated OTP:", String(otp));
-        console.log("OTP Type:", typeof otp);
-        console.log("Template ID:", templateId);
-        console.log("OTP Variable (num):", payload.numbers[0].num);
-        console.log("Minutes Variable (num2):", payload.numbers[0].num2);
-        console.log("Complete SMS Payload:");
-        console.log(JSON.stringify(payload, null, 2));
-        console.log("==========================================\n");
+
 
         const response = await axios.post(
             `${baseUrl}/sms/sendMessage`,

@@ -889,13 +889,13 @@ POST http://localhost:3001/api/check-pincode
 Content-Type: application/json
 
 {
-  "pincode": "523002"
+  "pincode": "855107"
 }
 
 ###
-GET http://localhost:3001/api/orders/6afac908d5cbdcfc5215dbe4/track-shipment
+GET http://localhost:3001/api/orders/6afe8b5114eff9afdfe7bb67/track-shipment
 Content-Type: application/json
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk0ODk2NzAzLCJleHAiOjE3OTQ5ODMxMDN9.BFZEjuNrQReuc-0Pz99axSxCw4bgqGv1k7qpIds1VG4
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWZhYjFhNGQ1Y2JkY2ZjNTIxNWQ3MWQiLCJpYXQiOjE3OTUwNzkzMTIsImV4cCI6MTc5NTA4MDIxMn0.iGkpVIW_qP4yq47zsRMYg4lne_2VFewiXlX9wPh91ys
 
 ###
 POST http://localhost:3001/api/orders/track-shipments/bulk
@@ -927,3 +927,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZ
     "fromDate": "2026-11-17",
     "toDate": "2026-11-17"
 }
+
+###
+GET http://localhost:3001/api/whatsapp/templates
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk1MDA3MTU1LCJleHAiOjE3OTUwOTM1NTV9.sK7nNo7hqHQ2ziT2NCeA43bV6oeITcazo77LlVHFN9o

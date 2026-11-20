@@ -1,7 +1,8 @@
-
+const mongoose = require("mongoose");
 const { searchPickupAddress, checkServiceability, createSequelShipment, trackSequelShipment, trackMultipleSequelShipments, cancelSequelShipment, downloadSequelPOD } = require("../service/sequel247.service");
 const Order = require("../models/order");
-const mongoose = require("mongoose");
+const Product = require("../models/product");
+
 
 
 // Verify OZO pickup address
@@ -721,9 +722,14 @@ const cleanSequelAddress = (value = "") => {
 
 
 
+
 exports.getSequelShipmentTracking = async (req, res) => {
     try {
         const { id } = req.params;
+
+        // ==========================================
+        // 1. FETCH ORDER
+        // ==========================================
 
         const order = await Order.findById(id);
 
@@ -733,6 +739,10 @@ exports.getSequelShipmentTracking = async (req, res) => {
                 message: "Order not found"
             });
         }
+
+        // ==========================================
+        // 2. VALIDATE SHIPMENT
+        // ==========================================
 
         const shipment = order.sequelShipment;
 
@@ -750,50 +760,74 @@ exports.getSequelShipmentTracking = async (req, res) => {
             });
         }
 
+        // ==========================================
+        // 3. FETCH SEQUEL247 TRACKING
+        // ==========================================
+
         const result = await trackSequelShipment(
             shipment.docketNumber
         );
 
-        const apiStatus = String(result?.status).toLowerCase();
-
-        if (apiStatus !== "true") {
+        if (String(result?.status).toLowerCase() !== "true") {
             return res.status(400).json({
                 success: false,
-                message: result?.message || "No tracking information found",
+                message:
+                    result?.message ||
+                    "No tracking information found",
                 errorInfo: result?.errorInfo || []
             });
         }
 
         const trackingData = result.data || {};
 
-        // Update latest shipment status
-        order.sequelShipment.shipmentStatus =
-            trackingData.shipment_status ||
-            order.sequelShipment.shipmentStatus;
+        // ==========================================
+        // 4. UPDATE SHIPMENT STATUS
+        // ==========================================
 
-        // Existing tracking history
+        if (trackingData.shipment_status) {
+            shipment.shipmentStatus =
+                trackingData.shipment_status;
+        }
+
+        if (trackingData.estimated_delivery) {
+            shipment.estimatedDelivery =
+                trackingData.estimated_delivery;
+        }
+
+        // ==========================================
+        // 5. MERGE TRACKING HISTORY
+        // ==========================================
+
         const existingTracking =
-            order.sequelShipment.trackingHistory || [];
+            shipment.trackingHistory || [];
 
-        // Latest tracking events from Sequel247
-        const newTracking = trackingData.tracking || [];
+        const newTracking =
+            Array.isArray(trackingData.tracking)
+                ? trackingData.tracking
+                : [];
 
-        // Merge and remove duplicate events
         const trackingMap = new Map();
 
         [...existingTracking, ...newTracking].forEach(event => {
+
+            const normalizedEvent = {
+                description: event.description || "",
+                location: event.location || "",
+                date_time: event.date_time || "",
+                code: event.code || ""
+            };
+
             const eventKey = [
-                event.code || "",
-                event.date_time || "",
-                event.description || "",
-                event.location || ""
+                normalizedEvent.code,
+                normalizedEvent.date_time,
+                normalizedEvent.description,
+                normalizedEvent.location
             ].join("|");
 
-            trackingMap.set(eventKey, event);
+            trackingMap.set(eventKey, normalizedEvent);
         });
 
-        // Keep tracking events in chronological order
-        order.sequelShipment.trackingHistory = [
+        shipment.trackingHistory = [
             ...trackingMap.values()
         ].sort((a, b) =>
             String(a.date_time || "").localeCompare(
@@ -801,33 +835,302 @@ exports.getSequelShipmentTracking = async (req, res) => {
             )
         );
 
-        order.sequelShipment.lastTrackedAt = new Date();
+        shipment.lastTrackedAt = new Date();
 
         await order.save();
 
+        // ==========================================
+        // 6. FETCH PRODUCTS
+        // ==========================================
+
+        const productIds = [
+            ...new Set(
+                order.items.map(item =>
+                    String(item.product?._id || item.product)
+                )
+            )
+        ];
+
+        const products = await Product.find({
+            _id: { $in: productIds }
+        })
+            .select("name slug images variants category brand")
+            .lean();
+
+        // Product lookup map
+        const productMap = new Map(
+            products.map(product => [
+                String(product._id),
+                product
+            ])
+        );
+
+        // ==========================================
+        // 7. PREPARE ORDER ITEMS
+        // ==========================================
+
+        const orderItems = order.items.map(item => {
+
+            const productId = String(
+                item.product?._id || item.product
+            );
+
+            const product = productMap.get(productId);
+
+            // Find exact embedded variant
+            const variant = product?.variants?.find(
+                v => String(v._id) === String(item.variant)
+            );
+
+            // Product image from Product schema
+            const productImage =
+                product?.images?.[0] ||
+                item.productSnapshot?.image ||
+                null;
+
+            return {
+
+                productId: productId,
+
+                productName:
+                    item.productSnapshot?.name ||
+                    product?.name ||
+                    "Product",
+
+                productImage: productImage,
+
+                productImages:
+                    product?.images || [],
+
+                slug:
+                    item.productSnapshot?.slug ||
+                    product?.slug ||
+                    null,
+
+                category:
+                    item.productSnapshot?.category ||
+                    product?.category ||
+                    null,
+
+                brand:
+                    item.productSnapshot?.brand ||
+                    product?.brand ||
+                    null,
+
+                // Variant details
+                variantId: item.variant,
+
+                sku:
+                    item.variantSnapshot?.sku ||
+                    variant?.sku ||
+                    null,
+
+                metalType:
+                    item.variantSnapshot?.metalType ||
+                    variant?.metalType ||
+                    null,
+
+                purity:
+                    item.variantSnapshot?.purity ||
+                    variant?.metalPurity ||
+                    null,
+
+                metalColor:
+                    item.variantSnapshot?.metalColor ||
+                    variant?.metalColor ||
+                    null,
+
+                size:
+                    item.variantSnapshot?.size ||
+                    variant?.size ||
+                    null,
+
+                grossWeight:
+                    item.variantSnapshot?.grossWeight ??
+                    variant?.grossWeight ??
+                    0,
+
+                netWeight:
+                    item.variantSnapshot?.netWeight ??
+                    variant?.netWeight ??
+                    0,
+
+                wastagePercentage:
+                    item.variantSnapshot?.wastagePercentage ??
+                    variant?.wastagePercentage ??
+                    0,
+
+                // Order quantity and price
+                quantity: item.quantity,
+
+                unitPrice: item.unitPrice,
+
+                totalPrice: item.totalPrice,
+
+                // Pricing snapshot
+                pricing: {
+
+                    goldRate:
+                        item.pricingSnapshot?.goldRate ?? 0,
+
+                    goldValue:
+                        item.pricingSnapshot?.goldValue ?? 0,
+
+                    makingCharge:
+                        item.pricingSnapshot?.makingCharge ?? 0,
+
+                    wastageAmount:
+                        item.pricingSnapshot?.wastageAmount ?? 0,
+
+                    stoneValue:
+                        item.pricingSnapshot?.stoneValue ?? 0,
+
+                    diamondValue:
+                        item.pricingSnapshot?.diamondValue ?? 0,
+
+                    discountAmount:
+                        item.pricingSnapshot?.discountAmount ?? 0,
+
+                    gstPercentage:
+                        item.pricingSnapshot?.gstPercentage ?? 0,
+
+                    gstAmount:
+                        item.pricingSnapshot?.gstAmount ?? 0,
+
+                    finalPrice:
+                        item.pricingSnapshot?.finalPrice ??
+                        item.totalPrice
+                }
+            };
+        });
+
+        // ==========================================
+        // 8. FINAL RESPONSE
+        // ==========================================
+
         return res.status(200).json({
+
             success: true,
+
             message: "Shipment tracking fetched successfully",
+
             data: {
-                orderNumber: order.orderNumber,
-                docketNumber:
-                    trackingData.docket_no || shipment.docketNumber,
-                brn: trackingData.br_number || shipment.brn,
-                shipmentStatus:
-                    trackingData.shipment_status ||
-                    order.sequelShipment.shipmentStatus,
-                estimatedDelivery:
-                    trackingData.estimated_delivery ||
-                    shipment.estimatedDelivery,
-                geography: trackingData.geography,
-                noOfPackages: trackingData.no_of_packages,
-                tracking: order.sequelShipment.trackingHistory,
-                lastTrackedAt: order.sequelShipment.lastTrackedAt
+
+                // ORDER DETAILS
+                orderDetails: {
+
+                    orderId: order._id,
+
+                    orderNumber: order.orderNumber,
+
+                    invoiceNumber:
+                        order.invoiceNumber || null,
+
+                    orderDate: order.createdAt,
+
+                    orderStatus: order.orderStatus,
+
+                    paymentMethod: order.paymentMethod,
+
+                    paymentStatus: order.paymentStatus,
+
+                    customer: {
+                        name: order.customerDetails?.name || ""
+                    },
+
+                    items: orderItems,
+
+                    pricing: {
+                        subTotal: order.subTotal,
+                        discountAmount: order.discountAmount,
+                        shippingCharge: order.shippingCharge,
+                        gstAmount: order.gstAmount,
+                        totalAmount: order.totalAmount
+                    },
+
+                    deliveryAddress: {
+                        fullName:
+                            order.addressSnapshot?.fullName || "",
+
+                        phone:
+                            order.addressSnapshot?.phone || "",
+
+                        addressLine1:
+                            order.addressSnapshot?.addressLine1 || "",
+
+                        addressLine2:
+                            order.addressSnapshot?.addressLine2 || "",
+
+                        landmark:
+                            order.addressSnapshot?.landmark || "",
+
+                        city:
+                            order.addressSnapshot?.city || "",
+
+                        state:
+                            order.addressSnapshot?.state || "",
+
+                        postalCode:
+                            order.addressSnapshot?.postalCode || "",
+
+                        country:
+                            order.addressSnapshot?.country || ""
+                    }
+                },
+
+                // SEQUEL247 SHIPMENT DETAILS
+                shipmentDetails: {
+
+                    docketNumber:
+                        trackingData.docket_no ||
+                        shipment.docketNumber,
+
+                    brn:
+                        trackingData.br_number ||
+                        shipment.brn,
+
+                    shipmentStatus:
+                        trackingData.shipment_status ||
+                        shipment.shipmentStatus,
+
+                    estimatedDelivery:
+                        trackingData.estimated_delivery ||
+                        shipment.estimatedDelivery,
+
+                    geography:
+                        trackingData.geography || "",
+
+                    noOfPackages:
+                        trackingData.no_of_packages || "",
+
+                    requestedPickupDate:
+                        trackingData.requested_pickup_date || "",
+
+                    actualPickedUpDateTime:
+                        trackingData.actual_pickedup_date_time || "",
+
+                    pickedUpBy:
+                        trackingData.pickedup_by_name || "",
+
+                    trackingLink:
+                        shipment.trackingLink || "",
+
+                    lastTrackedAt:
+                        shipment.lastTrackedAt
+                },
+
+                // ACTUAL SEQUEL247 TRACKING HISTORY
+                tracking: shipment.trackingHistory
+
             }
         });
 
     } catch (error) {
-        console.error("Sequel247 tracking error:", error.message);
+
+        console.error(
+            "Sequel247 tracking error:",
+            error
+        );
 
         return res.status(500).json({
             success: false,
@@ -836,6 +1139,7 @@ exports.getSequelShipmentTracking = async (req, res) => {
         });
     }
 };
+
 
 
 
