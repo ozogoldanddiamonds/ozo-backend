@@ -1,8 +1,7 @@
-const Admin = require('../models/user');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-
+const Admin = require("../models/user");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
 // REGISTER
 // exports.register = async (req, res) => {
@@ -48,7 +47,7 @@ exports.register = async (req, res) => {
       contactNumber,
       address,
       location,
-      branchId
+      branchId,
     } = req.body;
 
     const existingUser = await Admin.findOne({ email });
@@ -66,7 +65,7 @@ exports.register = async (req, res) => {
       contactNumber,
       address,
       location,
-      permissions: []
+      permissions: [],
     };
 
     if (role === "BRANCH") {
@@ -77,18 +76,18 @@ exports.register = async (req, res) => {
     if (role === "SUB_BRANCH") {
       if (!branchId) {
         return res.status(400).json({
-          message: "branchId is required for sub branch"
+          message: "branchId is required for sub branch",
         });
       }
 
       const parentBranch = await Admin.findOne({
         _id: branchId,
-        role: "BRANCH"
+        role: "BRANCH",
       });
 
       if (!parentBranch) {
         return res.status(400).json({
-          message: "Invalid branch selected"
+          message: "Invalid branch selected",
         });
       }
 
@@ -100,16 +99,14 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       message: `${role} Created Successfully`,
-      user
+      user,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-
 // LOGIN
-
 
 // exports.login = async (req, res) => {
 //   try {
@@ -149,7 +146,7 @@ exports.register = async (req, res) => {
 //     res.status(200).json({
 //       message: 'Login Success',
 //       token,
-//         _id: user._id, 
+//         _id: user._id,
 //       role: user.role,
 //        name: user.name,
 //   email: user.email,
@@ -166,25 +163,21 @@ exports.register = async (req, res) => {
 // LOGIN
 exports.login = async (req, res) => {
   try {
-
     const { email, password } = req.body;
 
     const user = await Admin.findOne({ email });
 
     if (!user) {
       return res.status(404).json({
-        message: 'User not found'
+        message: "User not found",
       });
     }
 
-    const checkPassword = await bcrypt.compare(
-      password,
-      user.password
-    );
+    const checkPassword = await bcrypt.compare(password, user.password);
 
     if (!checkPassword) {
       return res.status(400).json({
-        message: 'Invalid password'
+        message: "Invalid password",
       });
     }
 
@@ -192,12 +185,9 @@ exports.login = async (req, res) => {
     // ADD THIS BLOCK HERE
     // ==========================
 
-    if (
-      user.role === "SUB_BRANCH" &&
-      user.status === "INACTIVE"
-    ) {
+    if (user.role === "SUB_BRANCH" && user.status === "INACTIVE") {
       return res.status(403).json({
-        message: "Your account is inactive. Please contact Branch Admin."
+        message: "Your account is inactive. Please contact Branch Admin.",
       });
     }
 
@@ -208,113 +198,86 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       {
         id: user._id,
+        userId: user._id.toString(),
         role: user.role,
-        branchId: user.branchId
+        branchId: user.branchId,
       },
       process.env.JWT_SECRET,
       {
-        expiresIn: '1d'
-      }
+        expiresIn: "1d",
+      },
     );
 
     res.status(200).json({
-      message: 'Login Success',
+      message: "Login Success",
       token,
       _id: user._id,
       role: user.role,
       name: user.name,
       email: user.email,
-      permissions: user.permissions
+      permissions: user.permissions,
     });
-
   } catch (error) {
-
     res.status(500).json({
-      message: error.message
+      message: error.message,
     });
-
   }
 };
 
-
 exports.getBranchList = async (req, res) => {
-
   try {
-
-    const branches = await Admin.find(
-      { role: 'BRANCH' }
-    ).select(
-      'name email contactNumber address location status'
+    const branches = await Admin.find({ role: "BRANCH" }).select(
+      "name email contactNumber address location status",
     );
 
     res.status(200).json({
       success: true,
-      message: 'Branch List Fetched Successfully',
-      data: branches
+      message: "Branch List Fetched Successfully",
+      data: branches,
     });
-
   } catch (error) {
-
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
-
   }
-
 };
 exports.getAllSubBranches = async (req, res) => {
-
   try {
+    const subBranches = await Admin.find({
+      role: "SUB_BRANCH",
 
-    const subBranches =
-      await Admin.find({
-
-        role: 'SUB_BRANCH',
-
-        isActive: true
-
+      isActive: true,
+    })
+      .populate({
+        path: "branchId",
+        select: "name email",
       })
-        .populate({
-          path: 'branchId',
-          select: 'name email'
-        })
-        .sort({ createdAt: -1 })
-        .lean();
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json({
-
       success: true,
 
-      data: subBranches
-
+      data: subBranches,
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     res.status(500).json({
-
       success: false,
 
-      message: error.message
-
+      message: error.message,
     });
-
   }
-
 };
 exports.updateSubBranch = async (req, res) => {
   try {
-
     const id = req.params.id;
 
     const existingUser = await Admin.findById(id);
 
     if (!existingUser) {
       return res.status(404).json({
-        message: "User not found"
+        message: "User not found",
       });
     }
 
@@ -324,10 +287,7 @@ exports.updateSubBranch = async (req, res) => {
     // BRANCH ID
     // ==========================================
 
-    if (
-      updateData.branchId === "" ||
-      updateData.branchId === undefined
-    ) {
+    if (updateData.branchId === "" || updateData.branchId === undefined) {
       delete updateData.branchId;
     }
 
@@ -345,7 +305,6 @@ exports.updateSubBranch = async (req, res) => {
     // ==========================================
 
     if (updateData.role === "SUB_BRANCH") {
-
       // If branchId is not sent in request,
       // use existing branchId
       if (!updateData.branchId) {
@@ -354,19 +313,19 @@ exports.updateSubBranch = async (req, res) => {
 
       if (!updateData.branchId) {
         return res.status(400).json({
-          message: "branchId is required for sub branch"
+          message: "branchId is required for sub branch",
         });
       }
 
       // Verify selected branch really exists
       const parentBranch = await Admin.findOne({
         _id: updateData.branchId,
-        role: "BRANCH"
+        role: "BRANCH",
       });
 
       if (!parentBranch) {
         return res.status(400).json({
-          message: "Invalid branch selected"
+          message: "Invalid branch selected",
         });
       }
     }
@@ -376,18 +335,11 @@ exports.updateSubBranch = async (req, res) => {
     // ==========================================
 
     if (updateData.password && updateData.password.trim() !== "") {
-
-      updateData.password = await bcrypt.hash(
-        updateData.password,
-        10
-      );
-
+      updateData.password = await bcrypt.hash(updateData.password, 10);
     } else {
-
       // Password empty/not provided means
       // don't change existing password
       delete updateData.password;
-
     }
 
     // ==========================================
@@ -399,21 +351,18 @@ exports.updateSubBranch = async (req, res) => {
       { $set: updateData },
       {
         new: true,
-        runValidators: true
-      }
+        runValidators: true,
+      },
     );
 
     res.status(200).json({
       message: "Sub Branch Updated Successfully",
-      user
+      user,
     });
-
   } catch (error) {
-
     res.status(500).json({
-      message: error.message
+      message: error.message,
     });
-
   }
 };
 // exports.updateSubBranch = async (req, res) => {
@@ -499,126 +448,85 @@ exports.updateSubBranch = async (req, res) => {
 
 // };
 exports.getSubBranchById = async (req, res) => {
-
   try {
-
     const { id } = req.params;
 
-    const subBranch =
-      await Admin.findOne({
+    const subBranch = await Admin.findOne({
+      _id: id,
 
-        _id: id,
-
-        role: 'SUB_BRANCH'
-
-      }).select('-password');
+      role: "SUB_BRANCH",
+    }).select("-password");
 
     if (!subBranch) {
-
       return res.status(404).json({
-
-        message: 'Sub Branch Not Found'
-
+        message: "Sub Branch Not Found",
       });
-
     }
 
     res.status(200).json({
-
       success: true,
 
-      data: subBranch
-
+      data: subBranch,
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     res.status(500).json({
-
       success: false,
 
-      message: error.message
-
+      message: error.message,
     });
-
   }
-
 };
 
 exports.deleteSubBranch = async (req, res) => {
-
   try {
-
     const { id } = req.params;
 
-    const subBranch =
-      await Admin.findOneAndUpdate(
+    const subBranch = await Admin.findOneAndUpdate(
+      {
+        _id: id,
+        role: "SUB_BRANCH",
+      },
 
-        {
-          _id: id,
-          role: 'SUB_BRANCH'
-        },
+      {
+        isActive: false,
+      },
 
-        {
-          isActive: false
-        },
-
-        {
-          new: true
-        }
-
-      );
+      {
+        new: true,
+      },
+    );
 
     if (!subBranch) {
-
       return res.status(404).json({
-
         success: false,
 
-        message: 'Sub Branch Not Found'
-
+        message: "Sub Branch Not Found",
       });
-
     }
 
     res.status(200).json({
-
       success: true,
 
-      message: 'Sub Branch Deleted Successfully'
-
+      message: "Sub Branch Deleted Successfully",
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     res.status(500).json({
-
       success: false,
 
-      message: error.message
-
+      message: error.message,
     });
-
   }
-
 };
-
-
 
 exports.updateSubBranchStatus = async (req, res) => {
   try {
-
     const { id } = req.params;
     const { status } = req.body;
 
     if (!["ACTIVE", "INACTIVE"].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid Status"
+        message: "Invalid Status",
       });
     }
 
@@ -627,7 +535,7 @@ exports.updateSubBranchStatus = async (req, res) => {
     if (!subBranch) {
       return res.status(404).json({
         success: false,
-        message: "Sub Branch not found"
+        message: "Sub Branch not found",
       });
     }
 
@@ -635,7 +543,7 @@ exports.updateSubBranchStatus = async (req, res) => {
     if (subBranch.role !== "SUB_BRANCH") {
       return res.status(400).json({
         success: false,
-        message: "Only Sub Branch status can be updated"
+        message: "Only Sub Branch status can be updated",
       });
     }
 
@@ -646,19 +554,15 @@ exports.updateSubBranchStatus = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Sub Branch ${status} Successfully`,
-      data: subBranch
+      data: subBranch,
     });
-
   } catch (error) {
-
     return res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
-
   }
 };
-
 
 // FORGOT PASSWORD
 exports.forgotPassword = async (req, res) => {
@@ -669,33 +573,28 @@ exports.forgotPassword = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({
-        message: 'Email not found'
+        message: "Email not found",
       });
     }
 
-    const resetToken = crypto
-      .randomBytes(32)
-      .toString('hex');
+    const resetToken = crypto.randomBytes(32).toString("hex");
 
     user.resetToken = resetToken;
 
-    user.resetTokenExpire =
-      Date.now() + 10 * 60 * 1000;
+    user.resetTokenExpire = Date.now() + 10 * 60 * 1000;
 
     await user.save();
 
     res.status(200).json({
-      message: 'Reset token generated',
-      resetToken
+      message: "Reset token generated",
+      resetToken,
     });
-
   } catch (error) {
     res.status(500).json({
-      message: error.message
+      message: error.message,
     });
   }
 };
-
 
 // RESET PASSWORD
 exports.resetPassword = async (req, res) => {
@@ -704,17 +603,16 @@ exports.resetPassword = async (req, res) => {
 
     const user = await Admin.findOne({
       resetToken: token,
-      resetTokenExpire: { $gt: Date.now() }
+      resetTokenExpire: { $gt: Date.now() },
     });
 
     if (!user) {
       return res.status(400).json({
-        message: 'Invalid or expired token'
+        message: "Invalid or expired token",
       });
     }
 
-    const hashedPassword =
-      await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     user.password = hashedPassword;
     user.resetToken = undefined;
@@ -723,12 +621,11 @@ exports.resetPassword = async (req, res) => {
     await user.save();
 
     res.status(200).json({
-      message: 'Password reset successful'
+      message: "Password reset successful",
     });
-
   } catch (error) {
     res.status(500).json({
-      message: error.message
+      message: error.message,
     });
   }
 };

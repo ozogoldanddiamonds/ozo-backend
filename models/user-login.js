@@ -1,4 +1,3 @@
-
 const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema({
@@ -9,16 +8,15 @@ const UserSchema = new mongoose.Schema({
   googleId: { type: String },
   token: { type: String },
 
-  // Profile details
   gender: {
     type: String,
     enum: ["Male", "Female", "Other", ""],
-    default: ""
+    default: "",
   },
+
   dateOfBirth: { type: Date, default: null },
   anniversaryDate: { type: Date, default: null },
 
-  // Address details
   addressLine1: { type: String, trim: true, default: "" },
   addressLine2: { type: String, trim: true, default: "" },
   city: { type: String, trim: true, default: "" },
@@ -27,21 +25,13 @@ const UserSchema = new mongoose.Schema({
   country: { type: String, trim: true, default: "India" },
 
   createdAt: { type: Date, default: Date.now },
+
   newPhone: { type: String },
   newEmail: { type: String },
+
   OTP: { type: String },
   isVerified: { type: Boolean, default: false },
   OTPExpires: { type: Date },
-  refreshTokenHash: {
-    type: String,
-    default: null
-  },
-  refreshTokenExpiresAt: {
-    type: Date,
-    default: null
-  }
 });
 
-module.exports =
-  mongoose.models.User ||
-  mongoose.model("User", UserSchema);
+module.exports = mongoose.models.User || mongoose.model("User", UserSchema);
