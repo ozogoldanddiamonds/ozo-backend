@@ -27,13 +27,12 @@ const formatDate = (date) =>
   });
 
 exports.createRazorpayOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-
   try {
     const userId = req.user?.userId;
 
     const { productId, variantId, quantity, items, addressId } = req.body;
 
+    // 1. Validate user
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -41,6 +40,7 @@ exports.createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // 2. Validate address
     if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
       return res.status(400).json({
         success: false,
@@ -48,7 +48,7 @@ exports.createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // 1. Support Buy Now and Cart
+    // 3. Support Buy Now and Cart
     let checkoutItems = [];
 
     if (Array.isArray(items) && items.length > 0) {
@@ -74,7 +74,7 @@ exports.createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // 2. Validate and aggregate duplicate items
+    // 4. Validate and aggregate duplicate items
     const aggregatedItems = new Map();
 
     for (const item of checkoutItems) {
@@ -101,7 +101,7 @@ exports.createRazorpayOrder = async (req, res) => {
 
     checkoutItems = Array.from(aggregatedItems.values());
 
-    // 3. Load products and calculate backend prices
+    // 5. Load products and calculate backend prices
     let totalAmount = 0;
     const paymentAttemptItems = [];
 
@@ -124,6 +124,18 @@ exports.createRazorpayOrder = async (req, res) => {
         });
       }
 
+      // 6. Validate available Product stock
+      // Only check stock here. Do not decrease it.
+      const availableStock = Number(variant.stock || 0);
+
+      if (availableStock < item.quantity) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock for ${product.name}. Available stock: ${availableStock}`,
+        });
+      }
+
+      // 7. Calculate backend price
       const priceDetails = await calculateVariantPrice(variant);
       const unitPrice = Number(priceDetails?.finalPrice);
 
@@ -135,6 +147,7 @@ exports.createRazorpayOrder = async (req, res) => {
       }
 
       const finalUnitPrice = Number(unitPrice.toFixed(2));
+
       const itemTotalPrice = Number(
         (finalUnitPrice * item.quantity).toFixed(2),
       );
@@ -160,6 +173,7 @@ exports.createRazorpayOrder = async (req, res) => {
         unitPrice: finalUnitPrice,
         totalPrice: itemTotalPrice,
 
+        // No stock reservation during payment initiation
         stockAllocations: [],
         stockReservationStatus: "NOT_RESERVED",
       });
@@ -174,8 +188,7 @@ exports.createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // 4. Create Razorpay order.
-    // Do not return this order to frontend until stock is reserved.
+    // 8. Create Razorpay order
     const razorpayOrder = await razorpay.orders.create({
       amount: Math.round(totalAmount * 100),
       currency: "INR",
@@ -184,167 +197,33 @@ exports.createRazorpayOrder = async (req, res) => {
 
     const isBuyNow = !(Array.isArray(items) && items.length > 0);
 
-    let createdAttempt;
+    // 9. Create PaymentAttempt
+    const attemptData = {
+      user: userId,
+      address: addressId,
+      amount: totalAmount,
+      currency: "INR",
+      razorpayOrderId: razorpayOrder.id,
 
-    // 5. Reserve inventory and create PaymentAttempt atomically
-    await session.withTransaction(async () => {
-      for (const item of paymentAttemptItems) {
-        const productId = item.product;
-        const variantId = new mongoose.Types.ObjectId(item.variantId);
+      orderSource: "ONLINE",
 
-        let remainingQuantity = item.quantity;
-        const allocations = [];
+      status: "CREATED",
+      checkoutMode: isBuyNow ? "BUY_NOW" : "CART",
+      items: paymentAttemptItems,
+    };
 
-        // A. Supplier stock first (FIFO)
-        const supplierItems = await SupplierPurchaseItem.find({
-          product: productId,
-          variantId,
-          availableQuantity: { $gt: 0 },
-        })
-          .sort({ createdAt: 1, _id: 1 })
-          .session(session);
+    if (isBuyNow) {
+      attemptData.product = paymentAttemptItems[0].product;
+      attemptData.variantId = paymentAttemptItems[0].variantId;
+      attemptData.quantity = paymentAttemptItems[0].quantity;
+    }
 
-        for (const source of supplierItems) {
-          if (remainingQuantity <= 0) break;
+    const createdAttempt = await PaymentAttempt.create(attemptData);
 
-          const available = Number(source.availableQuantity);
-          const take = Math.min(available, remainingQuantity);
-
-          const result = await SupplierPurchaseItem.updateOne(
-            {
-              _id: source._id,
-              availableQuantity: { $gte: take },
-            },
-            {
-              $inc: {
-                availableQuantity: -take,
-              },
-            },
-            { session },
-          );
-
-          if (result.modifiedCount !== 1) {
-            throw new Error("Supplier stock changed. Please try again.");
-          }
-
-          allocations.push({
-            sourceType: "SUPPLIER",
-            sourceItemId: source._id,
-            quantity: take,
-          });
-
-          remainingQuantity -= take;
-        }
-
-        // B. Maker stock next
-        if (remainingQuantity > 0) {
-          const makerItems = await MakerProductionItem.find({
-            product: productId,
-            variantId,
-            availableQuantity: { $gt: 0 },
-          })
-            .sort({ createdAt: 1, _id: 1 })
-            .session(session);
-
-          for (const source of makerItems) {
-            if (remainingQuantity <= 0) break;
-
-            const available = Number(source.availableQuantity);
-            const take = Math.min(available, remainingQuantity);
-
-            const result = await MakerProductionItem.updateOne(
-              {
-                _id: source._id,
-                availableQuantity: { $gte: take },
-              },
-              {
-                $inc: {
-                  availableQuantity: -take,
-                },
-              },
-              { session },
-            );
-
-            if (result.modifiedCount !== 1) {
-              throw new Error("Maker stock changed. Please try again.");
-            }
-
-            allocations.push({
-              sourceType: "MAKER",
-              sourceItemId: source._id,
-              quantity: take,
-            });
-
-            remainingQuantity -= take;
-          }
-        }
-
-        // C. Reject if actual source stock is insufficient
-        if (remainingQuantity > 0) {
-          throw new Error(
-            `Insufficient source stock for ${item.variantSnapshot.sku}. Available stock is insufficient.`,
-          );
-        }
-
-        // D. Reduce aggregate Product variant stock
-        const stockResult = await Product.updateOne(
-          {
-            _id: productId,
-            variants: {
-              $elemMatch: {
-                _id: variantId,
-                stock: { $gte: item.quantity },
-              },
-            },
-          },
-          {
-            $inc: {
-              "variants.$.stock": -item.quantity,
-            },
-          },
-          { session },
-        );
-
-        if (stockResult.modifiedCount !== 1) {
-          throw new Error(
-            `Product stock mismatch for ${item.variantSnapshot.sku}`,
-          );
-        }
-
-        // E. Save reservation details in PaymentAttempt item
-        item.stockAllocations = allocations;
-        item.stockReservationStatus = "RESERVED";
-        item.stockReservedAt = new Date();
-        item.stockReservationExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
-      }
-
-      // F. Create PaymentAttempt only after successful reservation
-      const attemptData = {
-        user: userId,
-        address: addressId,
-        amount: totalAmount,
-        currency: "INR",
-        razorpayOrderId: razorpayOrder.id,
-        status: "CREATED",
-        checkoutMode: isBuyNow ? "BUY_NOW" : "CART",
-        items: paymentAttemptItems,
-      };
-
-      if (isBuyNow) {
-        attemptData.product = paymentAttemptItems[0].product;
-        attemptData.variantId = paymentAttemptItems[0].variantId;
-        attemptData.quantity = paymentAttemptItems[0].quantity;
-      }
-
-      const attempts = await PaymentAttempt.create([attemptData], { session });
-
-      createdAttempt = attempts[0];
-    });
-
-    // 6. Return payment details only after reservation succeeds
+    // 10. Return payment details
     return res.status(201).json({
       success: true,
-      message: "Stock reserved and Razorpay order created",
+      message: "Razorpay order created successfully",
       data: {
         paymentAttemptId: createdAttempt._id,
         razorpayOrderId: razorpayOrder.id,
@@ -360,15 +239,12 @@ exports.createRazorpayOrder = async (req, res) => {
       success: false,
       message: error.message || "Unable to initiate payment",
     });
-  } finally {
-    await session.endSession();
   }
 };
 
 exports.verifyRazorpayPayment = async (req, res) => {
   const totalStartedAt = Date.now();
 
-  // Log duration even if a request returns early or throws an error.
   const timed = async (label, callback) => {
     const startedAt = Date.now();
 
@@ -389,6 +265,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       razorpay_signature,
     } = req.body;
 
+    // 1. Validate user
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -396,19 +273,21 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
+    // 2. Validate payment details
     if (
       !paymentAttemptId ||
+      !mongoose.Types.ObjectId.isValid(paymentAttemptId) ||
       !razorpay_order_id ||
       !razorpay_payment_id ||
       !razorpay_signature
     ) {
       return res.status(400).json({
         success: false,
-        message: "Required payment details are missing",
+        message: "Required payment details are missing or invalid",
       });
     }
 
-    // 1. Payment attempt database lookup
+    // 3. Find PaymentAttempt
     const attempt = await timed("PAYMENT_ATTEMPT_LOOKUP", () =>
       PaymentAttempt.findOne({
         _id: paymentAttemptId,
@@ -424,7 +303,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Return the existing order if already completed.
+    // 4. Already completed order
     if (attempt.status === "ORDER_CREATED") {
       return res.status(200).json({
         success: true,
@@ -445,7 +324,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // 2. Verify Razorpay signature on the server.
+    // 5. Verify Razorpay signature
     const signatureStartedAt = Date.now();
 
     const expectedSignature = crypto
@@ -453,8 +332,18 @@ exports.verifyRazorpayPayment = async (req, res) => {
       .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
       .digest("hex");
 
-    const expectedBuffer = Buffer.from(expectedSignature);
-    const receivedBuffer = Buffer.from(razorpay_signature);
+    const expectedBuffer = Buffer.from(expectedSignature, "hex");
+
+    let receivedBuffer;
+
+    try {
+      receivedBuffer = Buffer.from(razorpay_signature, "hex");
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment signature",
+      });
+    }
 
     console.log(
       `[PAYMENT TIMING] SIGNATURE_VERIFICATION: ${
@@ -472,7 +361,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // 3. Fetch payment details from Razorpay.
+    // 6. Fetch payment details from Razorpay
     const payment = await timed("RAZORPAY_PAYMENT_FETCH", () =>
       razorpay.payments.fetch(razorpay_payment_id),
     );
@@ -496,7 +385,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // 4. Mark the payment attempt as PAID.
+    // 7. Mark PaymentAttempt as PAID
     if (attempt.status === "CREATED") {
       const updatedAttempt = await timed("MARK_PAYMENT_PAID", () =>
         PaymentAttempt.findOneAndUpdate(
@@ -511,7 +400,9 @@ exports.verifyRazorpayPayment = async (req, res) => {
               razorpayPaymentId: razorpay_payment_id,
             },
           },
-          { new: true },
+          {
+            new: true,
+          },
         ),
       );
 
@@ -542,7 +433,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       }
     }
 
-    // 5. Check whether the order already exists.
+    // 8. Check existing order
     let order = await timed("EXISTING_ORDER_LOOKUP", () =>
       Order.findOne({
         razorpayOrderId: attempt.razorpayOrderId,
@@ -550,11 +441,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
     );
 
     if (!order) {
-      /*
-       * Build order items:
-       * - Cart attempts use attempt.items.
-       * - Buy Now attempts use product, variantId, quantity.
-       */
+      // 9. Build order items from PaymentAttempt
       let orderItems = [];
 
       if (Array.isArray(attempt.items) && attempt.items.length > 0) {
@@ -563,12 +450,10 @@ exports.verifyRazorpayPayment = async (req, res) => {
           variant: item.variantId,
           quantity: item.quantity,
 
-          // PaymentAttempt snapshots
           productSnapshot: item.productSnapshot,
           variantSnapshot: item.variantSnapshot,
           pricingSnapshot: item.pricingSnapshot,
 
-          // Saved prices
           unitPrice: item.unitPrice,
           totalPrice: item.totalPrice,
         }));
@@ -599,7 +484,8 @@ exports.verifyRazorpayPayment = async (req, res) => {
         });
       }
 
-      // Reuse existing order creation and stock allocation logic.
+      // 10. Call createOrder
+      // Stock must be deducted only inside createOrder transaction.
       let orderResponse;
       let responseStatus = 200;
 
@@ -622,13 +508,13 @@ exports.verifyRazorpayPayment = async (req, res) => {
           responseStatus = code;
           return this;
         },
+
         json(body) {
           orderResponse = body;
           return this;
         },
       };
 
-      // 6. Measure the entire existing createOrder controller.
       await timed("CREATE_ORDER_TOTAL", () =>
         exports.createOrder(internalReq, internalRes),
       );
@@ -638,7 +524,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
         !orderResponse?.success ||
         !orderResponse?.data?._id
       ) {
-        // Recover if a concurrent request created the order.
+        // Recover if order was created by another request
         order = await timed("ORDER_RECOVERY_LOOKUP", () =>
           Order.findOne({
             razorpayOrderId: attempt.razorpayOrderId,
@@ -664,7 +550,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       }
     }
 
-    // 7. Save the final order reference on the payment attempt.
+    // 11. Update PaymentAttempt as ORDER_CREATED
     const completedAttempt = await timed("MARK_ORDER_CREATED", () =>
       PaymentAttempt.findOneAndUpdate(
         {
@@ -679,7 +565,9 @@ exports.verifyRazorpayPayment = async (req, res) => {
             order: order._id,
           },
         },
-        { new: true },
+        {
+          new: true,
+        },
       ),
     );
 
@@ -700,6 +588,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       }
     }
 
+    // 12. Success response
     return res.status(200).json({
       success: true,
       message: "Payment verified and order created successfully",
@@ -753,7 +642,22 @@ exports.createOrder = async (req, res) => {
       gstAmount = 0,
     } = req.body;
 
-    // 1. DUPLICATE ORDER CHECK
+    // ==========================================
+    // 1. VALIDATE ORDER SOURCE
+    // ==========================================
+
+    if (!["ONLINE", "BRANCH", "SUB_BRANCH"].includes(orderSource)) {
+      throw new Error("Invalid order source");
+    }
+
+    if (!paymentMethod || !items) {
+      throw new Error("Payment method and items are required");
+    }
+
+    // ==========================================
+    // 2. DUPLICATE ORDER CHECK
+    // ==========================================
+
     if (razorpayOrderId) {
       const existingOrder = await Order.findOne({
         razorpayOrderId,
@@ -770,15 +674,10 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    if (!["ONLINE", "BRANCH", "SUB_BRANCH"].includes(orderSource)) {
-      throw new Error("Invalid order source");
-    }
+    // ==========================================
+    // 3. PARSE ITEMS
+    // ==========================================
 
-    if (!paymentMethod || !items) {
-      throw new Error("Payment method and items are required");
-    }
-
-    // 2. PARSE ITEMS
     let parsedItems = items;
 
     if (typeof items === "string") {
@@ -789,14 +688,17 @@ exports.createOrder = async (req, res) => {
       throw new Error("At least one order item is required");
     }
 
-    // 3. CUSTOMER VALIDATION
+    // ==========================================
+    // 4. CUSTOMER AND PAYMENT VALIDATION
+    // ==========================================
+
     let user = null;
     let address = null;
     let paymentAttempt = null;
 
-    if (orderSource === "ONLINE") {
-      if (!paymentAttemptId) {
-        throw new Error("Payment attempt ID is required");
+    if (paymentAttemptId) {
+      if (!mongoose.Types.ObjectId.isValid(paymentAttemptId)) {
+        throw new Error("Invalid payment attempt ID");
       }
 
       paymentAttempt =
@@ -810,6 +712,10 @@ exports.createOrder = async (req, res) => {
         throw new Error("Payment is not completed");
       }
 
+      if (paymentAttempt.orderSource !== orderSource) {
+        throw new Error("Payment attempt order source mismatch");
+      }
+
       if (paymentAttempt.razorpayOrderId !== razorpayOrderId) {
         throw new Error("Razorpay order ID mismatch");
       }
@@ -821,24 +727,89 @@ exports.createOrder = async (req, res) => {
         throw new Error("Razorpay payment ID mismatch");
       }
 
-      if (userId) {
-        user = await User.findById(userId).session(session);
+      if (!paymentAttempt.razorpayPaymentId && !razorpayPaymentId) {
+        throw new Error("Razorpay payment ID is required");
       }
 
-      if (addressId) {
-        address = await Address.findById(addressId).session(session);
+      // ONLINE CUSTOMER
+      if (orderSource === "ONLINE") {
+        if (paymentAttempt.user?.toString() !== userId?.toString()) {
+          throw new Error("Payment attempt user mismatch");
+        }
+
+        if (userId) {
+          user = await User.findById(userId).session(session);
+        }
+
+        if (!user) {
+          throw new Error("Customer not found");
+        }
+
+        if (addressId) {
+          address = await Address.findById(addressId).session(session);
+        } else if (paymentAttempt.address) {
+          address = await Address.findById(paymentAttempt.address).session(
+            session,
+          );
+        }
+
+        if (!address) {
+          throw new Error("Customer address not found");
+        }
+
+        if (paymentAttempt.address?.toString() !== address._id.toString()) {
+          throw new Error("Payment address mismatch");
+        }
       }
+
+      // BRANCH / SUB_BRANCH POS CUSTOMER
+      else {
+        if (paymentAttempt.createdBy?.toString() !== createdBy?.toString()) {
+          throw new Error("POS payment creator mismatch");
+        }
+
+        if (paymentAttempt.branch?.toString() !== branch?.toString()) {
+          throw new Error("POS branch mismatch");
+        }
+
+        if (
+          orderSource === "SUB_BRANCH" &&
+          paymentAttempt.subBranch?.toString() !== subBranch?.toString()
+        ) {
+          throw new Error("POS sub-branch mismatch");
+        }
+
+        if (
+          !paymentAttempt.customerDetails?.name ||
+          !paymentAttempt.customerDetails?.phone
+        ) {
+          throw new Error("POS customer details missing");
+        }
+      }
+    } else if (orderSource === "ONLINE") {
+      throw new Error("Payment attempt ID is required");
     }
 
-    // 4. BRANCH VALIDATION
+    // ==========================================
+    // 5. BRANCH VALIDATION
+    // ==========================================
+
     if (orderSource === "BRANCH") {
-      if (!branch || !(await Admin.findById(branch).session(session))) {
+      if (
+        !branch ||
+        !mongoose.Types.ObjectId.isValid(branch) ||
+        !(await Admin.findById(branch).session(session))
+      ) {
         throw new Error("Valid branch admin is required");
       }
     }
 
     if (orderSource === "SUB_BRANCH") {
-      if (!subBranch || !(await Admin.findById(subBranch).session(session))) {
+      if (
+        !subBranch ||
+        !mongoose.Types.ObjectId.isValid(subBranch) ||
+        !(await Admin.findById(subBranch).session(session))
+      ) {
         throw new Error("Valid sub branch admin is required");
       }
     }
@@ -847,12 +818,19 @@ exports.createOrder = async (req, res) => {
       throw new Error("Created by admin not found");
     }
 
-    // 5. ORDER NUMBERS
+    // ==========================================
+    // 6. ORDER NUMBERS
+    // ==========================================
+
     const timestamp = Date.now();
+
     const orderNumber = `ORD-${timestamp}`;
     const invoiceNumber = `INV-${timestamp}`;
 
-    // 6. ADDRESS SNAPSHOT
+    // ==========================================
+    // 7. ADDRESS SNAPSHOT
+    // ==========================================
+
     let addressSnapshot = null;
 
     if (address) {
@@ -870,13 +848,30 @@ exports.createOrder = async (req, res) => {
       };
     }
 
-    // 7. TOTALS
+    // ==========================================
+    // 8. TOTALS
+    // ==========================================
+
     const orderItems = [];
+
     let subTotal = 0;
     let totalDiscount = Number(discountAmount) || 0;
-    let totalGst = Number(gstAmount) || 0;
+    let totalGst = 0;
 
-    // 8. PROCESS ITEMS
+    if (!Number.isFinite(totalDiscount) || totalDiscount < 0) {
+      throw new Error("Invalid discount amount");
+    }
+
+    const finalShippingCharge = Number(shippingCharge) || 0;
+
+    if (!Number.isFinite(finalShippingCharge) || finalShippingCharge < 0) {
+      throw new Error("Invalid shipping charge");
+    }
+
+    // ==========================================
+    // 9. PROCESS ORDER ITEMS
+    // ==========================================
+
     for (const item of parsedItems) {
       if (!item.product || !item.variant) {
         throw new Error("Product and variant are required");
@@ -888,12 +883,14 @@ exports.createOrder = async (req, res) => {
         throw new Error("Invalid item quantity");
       }
 
+      // FIND PRODUCT
       const product = await Product.findById(item.product).session(session);
 
       if (!product) {
         throw new Error(`Product not found: ${item.product}`);
       }
 
+      // FIND VARIANT
       const variant = product.variants.find(
         (v) => v._id.toString() === item.variant.toString(),
       );
@@ -902,82 +899,65 @@ exports.createOrder = async (req, res) => {
         throw new Error(`Variant not found for product ${product.name}`);
       }
 
-      // FIND PAYMENT SNAPSHOT
-      const savedItem =
-        orderSource === "ONLINE"
-          ? paymentAttempt.items?.find(
-              (p) =>
-                p.product.toString() === product._id.toString() &&
-                p.variantId.toString() === variant._id.toString(),
-            )
-          : null;
+      // PAYMENT SNAPSHOT
+      const savedItem = paymentAttempt
+        ? paymentAttempt.items?.find(
+            (p) =>
+              p.product.toString() === product._id.toString() &&
+              p.variantId.toString() === variant._id.toString(),
+          )
+        : null;
 
-      if (orderSource === "ONLINE" && !savedItem) {
+      if (paymentAttempt && !savedItem) {
         throw new Error(
           `Payment item not found for ${product.name} - ${variant.sku}`,
         );
       }
 
+      if (orderSource === "ONLINE") {
+        if (!savedItem) {
+          throw new Error(
+            `Payment item not found for ${product.name} - ${variant.sku}`,
+          );
+        }
+
+        if (Number(savedItem.quantity) !== quantity) {
+          throw new Error(`Payment quantity mismatch for ${product.name}`);
+        }
+      }
+
+      // ==========================================
+      // PRICE DETAILS
+      // ==========================================
+
       let priceDetails;
       let unitPrice;
       let totalPrice;
 
-      // ✅ IMPORTANT: Declare before use
-      let stockAllocations = [];
+      // No supplier/maker allocation.
+      const stockAllocations = [];
 
+      // ONLINE ORDER PRICING
       if (orderSource === "ONLINE") {
-        // Use already reserved Supplier / Maker allocations.
-        if (
-          !Array.isArray(savedItem.stockAllocations) ||
-          savedItem.stockAllocations.length === 0
-        ) {
-          throw new Error(
-            `Missing stock reservation for ${product.name} - ${variant.sku}`,
-          );
-        }
-
-        if (savedItem.stockReservationStatus !== "RESERVED") {
-          throw new Error(
-            `Stock reservation is not active for ${product.name} - ${variant.sku}`,
-          );
-        }
-
-        stockAllocations = savedItem.stockAllocations.map((allocation) => {
-          if (allocation.sourceType === "SUPPLIER" && allocation.sourceItemId) {
-            return {
-              sourceType: "SUPPLIER",
-              supplierPurchaseItem: allocation.sourceItemId,
-              makerProductionItem: null,
-              quantity: Number(allocation.quantity),
-            };
-          }
-
-          if (allocation.sourceType === "MAKER" && allocation.sourceItemId) {
-            return {
-              sourceType: "MAKER",
-              supplierPurchaseItem: null,
-              makerProductionItem: allocation.sourceItemId,
-              quantity: Number(allocation.quantity),
-            };
-          }
-
-          throw new Error("Invalid stock allocation source");
-        });
-
-        // Use payment-time locked pricing.
         priceDetails = savedItem.pricingSnapshot;
+
         unitPrice = Number(savedItem.unitPrice);
         totalPrice = Number(savedItem.totalPrice);
 
-        if (!priceDetails || !unitPrice || !totalPrice) {
+        if (
+          !priceDetails ||
+          !Number.isFinite(unitPrice) ||
+          !Number.isFinite(totalPrice) ||
+          unitPrice <= 0 ||
+          totalPrice <= 0 ||
+          Math.abs(totalPrice - unitPrice * quantity) > 0.01
+        ) {
           throw new Error(`Invalid saved pricing for ${product.name}`);
         }
-      } else {
-        // BRANCH / SUB_BRANCH: Existing pricing logic.
-        if (Number(variant.stock) < quantity) {
-          throw new Error(`Insufficient stock for ${product.name}`);
-        }
+      }
 
+      // BRANCH / SUB_BRANCH PRICING
+      else {
         priceDetails = await calculateVariantPrice(variant);
 
         if (!priceDetails) {
@@ -985,124 +965,63 @@ exports.createOrder = async (req, res) => {
         }
 
         unitPrice = Number(priceDetails.finalPrice) || 0;
-        totalPrice = unitPrice * quantity;
 
-        // FIFO allocation.
-        let remainingQuantity = quantity;
+        totalPrice = Number((unitPrice * quantity).toFixed(2));
 
-        // SUPPLIER STOCK
-        const supplierItems = await SupplierPurchaseItem.find({
-          product: product._id,
-          variantId: variant._id,
-          availableQuantity: { $gt: 0 },
-        })
-          .sort({ createdAt: 1, _id: 1 })
-          .session(session);
-
-        for (const supplierItem of supplierItems) {
-          if (remainingQuantity <= 0) break;
-
-          const available = Number(supplierItem.availableQuantity) || 0;
-
-          if (available <= 0) continue;
-
-          const allocateQuantity = Math.min(remainingQuantity, available);
-
-          const updateResult = await SupplierPurchaseItem.updateOne(
-            {
-              _id: supplierItem._id,
-              availableQuantity: { $gte: allocateQuantity },
-            },
-            {
-              $inc: {
-                availableQuantity: -allocateQuantity,
-              },
-            },
-            { session },
-          );
-
-          if (updateResult.modifiedCount !== 1) {
-            throw new Error(
-              `Supplier stock changed for ${product.name} - ${variant.sku}`,
-            );
-          }
-
-          stockAllocations.push({
-            sourceType: "SUPPLIER",
-            supplierPurchaseItem: supplierItem._id,
-            makerProductionItem: null,
-            quantity: allocateQuantity,
-          });
-
-          remainingQuantity -= allocateQuantity;
+        if (
+          !Number.isFinite(unitPrice) ||
+          unitPrice <= 0 ||
+          !Number.isFinite(totalPrice)
+        ) {
+          throw new Error(`Invalid product price for ${product.name}`);
         }
-
-        // MAKER STOCK
-        if (remainingQuantity > 0) {
-          const makerItems = await MakerProductionItem.find({
-            product: product._id,
-            variantId: variant._id,
-            availableQuantity: { $gt: 0 },
-          })
-            .sort({ createdAt: 1, _id: 1 })
-            .session(session);
-
-          for (const makerItem of makerItems) {
-            if (remainingQuantity <= 0) break;
-
-            const available = Number(makerItem.availableQuantity) || 0;
-
-            if (available <= 0) continue;
-
-            const allocateQuantity = Math.min(remainingQuantity, available);
-
-            const updateResult = await MakerProductionItem.updateOne(
-              {
-                _id: makerItem._id,
-                availableQuantity: { $gte: allocateQuantity },
-              },
-              {
-                $inc: {
-                  availableQuantity: -allocateQuantity,
-                },
-              },
-              { session },
-            );
-
-            if (updateResult.modifiedCount !== 1) {
-              throw new Error(
-                `Maker stock changed for ${product.name} - ${variant.sku}`,
-              );
-            }
-
-            stockAllocations.push({
-              sourceType: "MAKER",
-              supplierPurchaseItem: null,
-              makerProductionItem: makerItem._id,
-              quantity: allocateQuantity,
-            });
-
-            remainingQuantity -= allocateQuantity;
-          }
-        }
-
-        if (remainingQuantity > 0) {
-          throw new Error(
-            `Source stock unavailable for ${product.name} - SKU ${variant.sku}`,
-          );
-        }
-
-        // Deduct aggregate stock only for non-online orders.
-        variant.stock = Number(variant.stock) - quantity;
-
-        if (variant.stock < 0) {
-          throw new Error(`Invalid stock calculation for ${product.name}`);
-        }
-
-        await product.save({ session });
       }
 
+      // ==========================================
+      // STOCK VALIDATION AND DEDUCTION
+      // ==========================================
+      // Only Product.variants[].stock is actual inventory.
+      // SupplierPurchaseItem and MakerProductionItem
+      // must NOT be modified.
+      //
+      // This runs only when createOrder is called.
+      // The update is inside the same transaction as order.save().
+
+      const stockUpdate = await Product.updateOne(
+        {
+          _id: product._id,
+          variants: {
+            $elemMatch: {
+              _id: variant._id,
+              stock: {
+                $gte: quantity,
+              },
+            },
+          },
+        },
+        {
+          $inc: {
+            "variants.$.stock": -quantity,
+          },
+        },
+        {
+          session,
+        },
+      );
+
+      if (stockUpdate.modifiedCount !== 1) {
+        throw new Error(
+          `Insufficient product stock for ${product.name} - SKU ${variant.sku}`,
+        );
+      }
+
+      // Update local variant for any subsequent snapshot usage
+      variant.stock = Number(variant.stock || 0) - quantity;
+
+      // ==========================================
       // STONE WEIGHTS
+      // ==========================================
+
       const stoneWeight =
         variant.stones?.reduce(
           (total, stone) => total + (Number(stone.totalWeight) || 0),
@@ -1117,7 +1036,10 @@ exports.createOrder = async (req, res) => {
             0,
           ) || 0;
 
+      // ==========================================
       // PRODUCT SNAPSHOT
+      // ==========================================
+
       const productSnapshot = savedItem?.productSnapshot || {
         name: product.name,
         slug: product.slug,
@@ -1129,7 +1051,10 @@ exports.createOrder = async (req, res) => {
         brand: product.brand || "",
       };
 
+      // ==========================================
       // STONES SNAPSHOT
+      // ==========================================
+
       const stonesSnapshot =
         variant.stones?.map((stone) => ({
           stoneType: stone.stoneType,
@@ -1140,7 +1065,10 @@ exports.createOrder = async (req, res) => {
           stoneValue: Number(stone.stoneValue) || 0,
         })) || [];
 
+      // ==========================================
       // VARIANT SNAPSHOT
+      // ==========================================
+
       const variantSnapshot = savedItem?.variantSnapshot || {
         sku: variant.sku,
         metalType: variant.metalType,
@@ -1160,7 +1088,10 @@ exports.createOrder = async (req, res) => {
         stones: stonesSnapshot,
       };
 
+      // ==========================================
       // PRICING SNAPSHOT
+      // ==========================================
+
       const pricingSnapshot = savedItem?.pricingSnapshot || {
         goldRate: Number(priceDetails.goldRate) || 0,
         goldValue: Number(priceDetails.goldValue) || 0,
@@ -1174,7 +1105,10 @@ exports.createOrder = async (req, res) => {
         finalPrice: unitPrice,
       };
 
+      // ==========================================
       // CREATE ORDER ITEM
+      // ==========================================
+
       orderItems.push({
         product: product._id,
         variant: variant._id,
@@ -1188,27 +1122,44 @@ exports.createOrder = async (req, res) => {
       });
 
       subTotal += totalPrice;
+
       totalGst += (Number(priceDetails.gstAmount) || 0) * quantity;
     }
 
-    // 9. FINAL TOTAL
-    const finalTotal = subTotal - totalDiscount + Number(shippingCharge || 0);
+    // ==========================================
+    // 10. FINAL TOTAL
+    // ==========================================
+
+    subTotal = Number(subTotal.toFixed(2));
+    totalGst = Number(totalGst.toFixed(2));
+
+    const finalTotal = Number(
+      (subTotal - totalDiscount + finalShippingCharge).toFixed(2),
+    );
 
     if (!Number.isFinite(finalTotal) || finalTotal < 0) {
       throw new Error("Invalid order total");
     }
 
-    // 10. PAYMENT AMOUNT VALIDATION
-    if (orderSource === "ONLINE") {
+    // ==========================================
+    // 11. PAYMENT AMOUNT VALIDATION
+    // ==========================================
+
+    if (paymentAttempt) {
+      const attemptAmount = Number(paymentAttempt.amount);
+
       if (
-        Math.round(Number(paymentAttempt.amount) * 100) !==
-        Math.round(finalTotal * 100)
+        !Number.isFinite(attemptAmount) ||
+        Math.round(attemptAmount * 100) !== Math.round(finalTotal * 100)
       ) {
         throw new Error("Payment amount mismatch");
       }
     }
 
-    // 11. PAYMENT STATUS
+    // ==========================================
+    // 12. PAYMENT STATUS
+    // ==========================================
+
     let paymentStatus = "Pending";
 
     if (
@@ -1223,7 +1174,10 @@ exports.createOrder = async (req, res) => {
 
     const orderStatus = "Confirmed";
 
-    // 12. CUSTOMER DETAILS
+    // ==========================================
+    // 13. CUSTOMER DETAILS
+    // ==========================================
+
     let finalCustomerDetails = customerDetails || {};
 
     if (user) {
@@ -1234,29 +1188,51 @@ exports.createOrder = async (req, res) => {
       };
     }
 
-    // 13. CREATE ORDER
+    // POS customer details from PaymentAttempt
+    if (paymentAttempt && orderSource !== "ONLINE") {
+      finalCustomerDetails = {
+        name: paymentAttempt.customerDetails.name,
+        phone: paymentAttempt.customerDetails.phone,
+        email: paymentAttempt.customerDetails.email || "",
+      };
+    }
+
+    // ==========================================
+    // 14. CREATE ORDER
+    // ==========================================
+
     const order = new Order({
       orderNumber,
       invoiceNumber,
       orderSource,
+
       branch: branch || null,
       subBranch: subBranch || null,
       createdBy: createdBy || null,
+
       user: user?._id || null,
+
       customerDetails: finalCustomerDetails,
+
       items: orderItems,
+
       address: address?._id || null,
       addressSnapshot,
+
       paymentMethod,
       paymentStatus,
+
       subTotal,
       discountAmount: totalDiscount,
       couponCode,
-      shippingCharge: Number(shippingCharge) || 0,
+
+      shippingCharge: finalShippingCharge,
       gstAmount: totalGst,
       totalAmount: finalTotal,
+
       orderStatus,
       billingStatus: "Completed",
+
       statusHistory: [
         {
           status: orderStatus,
@@ -1265,10 +1241,14 @@ exports.createOrder = async (req, res) => {
           updatedAt: new Date(),
         },
       ],
+
       invoiceDate: new Date(),
+
       stockUpdated: true,
+
       razorpayOrderId: razorpayOrderId || null,
       razorpayPaymentId: razorpayPaymentId || null,
+
       paymentHistory: razorpayPaymentId
         ? [
             {
@@ -1284,43 +1264,11 @@ exports.createOrder = async (req, res) => {
 
     await order.save({ session });
 
-    // 14. MARK RESERVATION COMMITTED
-    if (orderSource === "ONLINE") {
-      const allItemsReserved = paymentAttempt.items.every(
-        (attemptItem) =>
-          attemptItem.stockReservationStatus === "RESERVED" &&
-          Array.isArray(attemptItem.stockAllocations) &&
-          attemptItem.stockAllocations.length > 0,
-      );
+    // ==========================================
+    // 15. UPDATE PAYMENT ATTEMPT
+    // ==========================================
 
-      if (!allItemsReserved) {
-        throw new Error("Some payment items have missing stock reservations");
-      }
-
-      const reservationResult = await PaymentAttempt.updateOne(
-        {
-          _id: paymentAttempt._id,
-          status: "PAID",
-          items: {
-            $not: {
-              $elemMatch: {
-                stockReservationStatus: { $ne: "RESERVED" },
-              },
-            },
-          },
-        },
-        {
-          $set: {
-            "items.$[].stockReservationStatus": "COMMITTED",
-          },
-        },
-        { session },
-      );
-
-      if (reservationResult.modifiedCount !== 1) {
-        throw new Error("Unable to commit stock reservation");
-      }
-
+    if (paymentAttempt) {
       const attemptResult = await PaymentAttempt.updateOne(
         {
           _id: paymentAttempt._id,
@@ -1333,7 +1281,9 @@ exports.createOrder = async (req, res) => {
             razorpayPaymentId,
           },
         },
-        { session },
+        {
+          session,
+        },
       );
 
       if (attemptResult.modifiedCount !== 1) {
@@ -1341,11 +1291,18 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    // 15. COMMIT
+    // ==========================================
+    // 16. COMMIT TRANSACTION
+    // ==========================================
+
     await session.commitTransaction();
+
     order.$session(null);
 
-    // 16. INVOICE AND WHATSAPP
+    // ==========================================
+    // 17. INVOICE AND WHATSAPP
+    // ==========================================
+
     try {
       const invoiceBuffer = await generateOrderInvoice(order);
 
@@ -1399,12 +1356,17 @@ exports.createOrder = async (req, res) => {
       }
     }
 
+    // ==========================================
+    // 18. SUCCESS RESPONSE
+    // ==========================================
+
     return res.status(201).json({
       success: true,
       message: "Order created successfully",
       data: order,
     });
   } catch (error) {
+    // TRANSACTION ROLLBACK
     if (session?.inTransaction()) {
       try {
         await session.abortTransaction();
