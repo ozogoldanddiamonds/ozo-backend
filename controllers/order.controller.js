@@ -10,1343 +10,1424 @@ const Admin = require("../models/user");
 const { sendInvoiceEmail } = require("../middleware/mail");
 const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const MakerProductionItem = require("../models/maker-production-item");
-
+const generateOrderInvoice = require("../utils/generate-order-invoice");
+const uploadInvoicePdf = require("../middleware/upload-invoice-pdf");
+const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
 const calculateVariantPrice = require("../utils/price-calculator");
 const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-
+const formatDate = (date) =>
+  new Date(date || Date.now()).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
 
 exports.createRazorpayOrder = async (req, res) => {
-    try {
-        const userId = req.user?.userId;
+  const session = await mongoose.startSession();
 
-        const {
-            productId,
+  try {
+    const userId = req.user?.userId;
+
+    const { productId, variantId, quantity, items, addressId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Please login first",
+      });
+    }
+
+    if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid address is required",
+      });
+    }
+
+    // 1. Support Buy Now and Cart
+    let checkoutItems = [];
+
+    if (Array.isArray(items) && items.length > 0) {
+      checkoutItems = items.map((item) => ({
+        productId: item.productId || item.product,
+        variantId: item.variantId || item.variant,
+        quantity: Number(item.quantity),
+      }));
+    } else if (productId && variantId) {
+      checkoutItems = [
+        {
+          productId,
+          variantId,
+          quantity: Number(quantity),
+        },
+      ];
+    }
+
+    if (!checkoutItems.length) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one product is required",
+      });
+    }
+
+    // 2. Validate and aggregate duplicate items
+    const aggregatedItems = new Map();
+
+    for (const item of checkoutItems) {
+      if (
+        !mongoose.Types.ObjectId.isValid(item.productId) ||
+        !mongoose.Types.ObjectId.isValid(item.variantId) ||
+        !Number.isInteger(item.quantity) ||
+        item.quantity < 1
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid product, variant or quantity",
+        });
+      }
+
+      const key = `${item.productId}_${item.variantId}`;
+
+      if (aggregatedItems.has(key)) {
+        aggregatedItems.get(key).quantity += item.quantity;
+      } else {
+        aggregatedItems.set(key, { ...item });
+      }
+    }
+
+    checkoutItems = Array.from(aggregatedItems.values());
+
+    // 3. Load products and calculate backend prices
+    let totalAmount = 0;
+    const paymentAttemptItems = [];
+
+    for (const item of checkoutItems) {
+      const product = await Product.findById(item.productId);
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      const variant = product.variants.id(item.variantId);
+
+      if (!variant) {
+        return res.status(404).json({
+          success: false,
+          message: `Variant not found for ${product.name}`,
+        });
+      }
+
+      const priceDetails = await calculateVariantPrice(variant);
+      const unitPrice = Number(priceDetails?.finalPrice);
+
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid price for ${product.name}`,
+        });
+      }
+
+      const finalUnitPrice = Number(unitPrice.toFixed(2));
+      const itemTotalPrice = Number(
+        (finalUnitPrice * item.quantity).toFixed(2),
+      );
+
+      totalAmount += itemTotalPrice;
+
+      paymentAttemptItems.push({
+        product: product._id,
+        variantId: variant._id.toString(),
+        quantity: item.quantity,
+
+        productSnapshot: product.toObject({
+          depopulate: true,
+          versionKey: false,
+        }),
+
+        variantSnapshot: variant.toObject({
+          depopulate: true,
+          versionKey: false,
+        }),
+
+        pricingSnapshot: priceDetails,
+        unitPrice: finalUnitPrice,
+        totalPrice: itemTotalPrice,
+
+        stockAllocations: [],
+        stockReservationStatus: "NOT_RESERVED",
+      });
+    }
+
+    totalAmount = Number(totalAmount.toFixed(2));
+
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment amount",
+      });
+    }
+
+    // 4. Create Razorpay order.
+    // Do not return this order to frontend until stock is reserved.
+    const razorpayOrder = await razorpay.orders.create({
+      amount: Math.round(totalAmount * 100),
+      currency: "INR",
+      receipt: `pay_${Date.now()}`,
+    });
+
+    const isBuyNow = !(Array.isArray(items) && items.length > 0);
+
+    let createdAttempt;
+
+    // 5. Reserve inventory and create PaymentAttempt atomically
+    await session.withTransaction(async () => {
+      for (const item of paymentAttemptItems) {
+        const productId = item.product;
+        const variantId = new mongoose.Types.ObjectId(item.variantId);
+
+        let remainingQuantity = item.quantity;
+        const allocations = [];
+
+        // A. Supplier stock first (FIFO)
+        const supplierItems = await SupplierPurchaseItem.find({
+          product: productId,
+          variantId,
+          availableQuantity: { $gt: 0 },
+        })
+          .sort({ createdAt: 1, _id: 1 })
+          .session(session);
+
+        for (const source of supplierItems) {
+          if (remainingQuantity <= 0) break;
+
+          const available = Number(source.availableQuantity);
+          const take = Math.min(available, remainingQuantity);
+
+          const result = await SupplierPurchaseItem.updateOne(
+            {
+              _id: source._id,
+              availableQuantity: { $gte: take },
+            },
+            {
+              $inc: {
+                availableQuantity: -take,
+              },
+            },
+            { session },
+          );
+
+          if (result.modifiedCount !== 1) {
+            throw new Error("Supplier stock changed. Please try again.");
+          }
+
+          allocations.push({
+            sourceType: "SUPPLIER",
+            sourceItemId: source._id,
+            quantity: take,
+          });
+
+          remainingQuantity -= take;
+        }
+
+        // B. Maker stock next
+        if (remainingQuantity > 0) {
+          const makerItems = await MakerProductionItem.find({
+            product: productId,
             variantId,
-            quantity,
-            items,
-            addressId
-        } = req.body;
+            availableQuantity: { $gt: 0 },
+          })
+            .sort({ createdAt: 1, _id: 1 })
+            .session(session);
 
-        if (!userId) {
-            return res.status(401).json({
-                success: false,
-                message: "Please login first"
-            });
-        }
+          for (const source of makerItems) {
+            if (remainingQuantity <= 0) break;
 
-        if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Valid address is required"
-            });
-        }
+            const available = Number(source.availableQuantity);
+            const take = Math.min(available, remainingQuantity);
 
-        /*
-         * Support both:
-         * 1. Buy Now: productId, variantId, quantity
-         * 2. Cart: items [{ productId, variantId, quantity }]
-         */
-        let checkoutItems = [];
-
-        if (Array.isArray(items) && items.length > 0) {
-            checkoutItems = items.map(item => ({
-                productId: item.productId || item.product,
-                variantId: item.variantId || item.variant,
-                quantity: Number(item.quantity)
-            }));
-        } else if (productId && variantId) {
-            checkoutItems = [{
-                productId,
-                variantId,
-                quantity: Number(quantity)
-            }];
-        }
-
-        if (!checkoutItems.length) {
-            return res.status(400).json({
-                success: false,
-                message: "At least one valid product and variant are required"
-            });
-        }
-
-        /*
-         * Validate input and aggregate duplicate product/variant entries.
-         */
-        const aggregatedItems = new Map();
-
-        for (const item of checkoutItems) {
-            if (
-                !item.productId ||
-                !mongoose.Types.ObjectId.isValid(item.productId) ||
-                !item.variantId ||
-                typeof item.variantId !== "string" ||
-                !item.variantId.trim() ||
-                !Number.isInteger(item.quantity) ||
-                item.quantity < 1
-            ) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Each item must have a valid product, variant and quantity"
-                });
-            }
-
-            const key = `${item.productId}_${item.variantId}`;
-
-            if (aggregatedItems.has(key)) {
-                const existingItem = aggregatedItems.get(key);
-                existingItem.quantity += item.quantity;
-            } else {
-                aggregatedItems.set(key, {
-                    productId: item.productId,
-                    variantId: item.variantId,
-                    quantity: item.quantity
-                });
-            }
-        }
-
-        checkoutItems = Array.from(aggregatedItems.values());
-
-        let totalAmount = 0;
-        const paymentAttemptItems = [];
-
-        /*
-         * Fetch products and calculate every variant's price on the backend.
-         */
-        for (const item of checkoutItems) {
-            const product = await Product.findById(item.productId);
-
-            if (!product) {
-                return res.status(404).json({
-                    success: false,
-                    message: `Product not found: ${item.productId}`
-                });
-            }
-
-            const variant = product.variants.id(item.variantId);
-
-            if (!variant) {
-                return res.status(404).json({
-                    success: false,
-                    message: `Variant not found for product: ${product.name || product._id}`
-                });
-            }
-
-            const availableStock = Number(variant.stock);
-
-            if (
-                !Number.isFinite(availableStock) ||
-                availableStock < item.quantity
-            ) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Insufficient stock for ${product.name || "a product"}`
-                });
-            }
-
-            const priceDetails = await calculateVariantPrice(variant);
-            const unitPrice = Number(priceDetails?.finalPrice);
-
-            if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Invalid price for ${product.name || "a product"}`
-                });
-            }
-
-            const finalUnitPrice = Number(unitPrice.toFixed(2));
-            const itemTotalPrice = Number(
-                (finalUnitPrice * item.quantity).toFixed(2)
+            const result = await MakerProductionItem.updateOne(
+              {
+                _id: source._id,
+                availableQuantity: { $gte: take },
+              },
+              {
+                $inc: {
+                  availableQuantity: -take,
+                },
+              },
+              { session },
             );
 
-            totalAmount += itemTotalPrice;
-
-            paymentAttemptItems.push({
-                product: product._id,
-                variantId: variant._id.toString(),
-                quantity: item.quantity,
-
-                // New schema fields
-                productSnapshot: product.toObject({
-                    depopulate: true,
-                    versionKey: false
-                }),
-
-                variantSnapshot: variant.toObject({
-                    depopulate: true,
-                    versionKey: false
-                }),
-
-                pricingSnapshot: priceDetails,
-
-                unitPrice: finalUnitPrice,
-                totalPrice: itemTotalPrice
-            });
-        }
-
-        totalAmount = Number(totalAmount.toFixed(2));
-
-        if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid payment amount"
-            });
-        }
-
-        /*
-         * IMPORTANT:
-         * Address ownership must also be validated against your actual
-         * Address schema before accepting a payment.
-         */
-
-        const razorpayOrder = await razorpay.orders.create({
-            amount: Math.round(totalAmount * 100),
-            currency: "INR",
-            receipt: `pay_${Date.now()}`
-        });
-
-        const isBuyNow = paymentAttemptItems.length === 1 &&
-            !Array.isArray(items);
-
-        const attemptData = {
-            user: userId,
-            address: addressId,
-            amount: totalAmount,
-            currency: "INR",
-            razorpayOrderId: razorpayOrder.id,
-            status: "CREATED",
-            checkoutMode: isBuyNow ? "BUY_NOW" : "CART",
-            items: paymentAttemptItems
-        };
-
-        /*
-         * Keep legacy single-product fields populated for Buy Now.
-         * This helps existing code that still reads these fields.
-         */
-        if (isBuyNow) {
-            attemptData.product = paymentAttemptItems[0].product;
-            attemptData.variantId = paymentAttemptItems[0].variantId;
-            attemptData.quantity = paymentAttemptItems[0].quantity;
-        }
-
-        const attempt = await PaymentAttempt.create(attemptData);
-
-        return res.status(201).json({
-            success: true,
-            message: "Razorpay order created",
-            data: {
-                paymentAttemptId: attempt._id,
-                razorpayOrderId: razorpayOrder.id,
-                amount: razorpayOrder.amount,
-                currency: razorpayOrder.currency,
-                keyId: process.env.RAZORPAY_KEY_ID
+            if (result.modifiedCount !== 1) {
+              throw new Error("Maker stock changed. Please try again.");
             }
-        });
-    } catch (error) {
-        console.error("Create Razorpay Order Error:", error);
 
-        return res.status(500).json({
-            success: false,
-            message: "Unable to initiate payment"
-        });
-    }
+            allocations.push({
+              sourceType: "MAKER",
+              sourceItemId: source._id,
+              quantity: take,
+            });
+
+            remainingQuantity -= take;
+          }
+        }
+
+        // C. Reject if actual source stock is insufficient
+        if (remainingQuantity > 0) {
+          throw new Error(
+            `Insufficient source stock for ${item.variantSnapshot.sku}. Available stock is insufficient.`,
+          );
+        }
+
+        // D. Reduce aggregate Product variant stock
+        const stockResult = await Product.updateOne(
+          {
+            _id: productId,
+            variants: {
+              $elemMatch: {
+                _id: variantId,
+                stock: { $gte: item.quantity },
+              },
+            },
+          },
+          {
+            $inc: {
+              "variants.$.stock": -item.quantity,
+            },
+          },
+          { session },
+        );
+
+        if (stockResult.modifiedCount !== 1) {
+          throw new Error(
+            `Product stock mismatch for ${item.variantSnapshot.sku}`,
+          );
+        }
+
+        // E. Save reservation details in PaymentAttempt item
+        item.stockAllocations = allocations;
+        item.stockReservationStatus = "RESERVED";
+        item.stockReservedAt = new Date();
+        item.stockReservationExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      }
+
+      // F. Create PaymentAttempt only after successful reservation
+      const attemptData = {
+        user: userId,
+        address: addressId,
+        amount: totalAmount,
+        currency: "INR",
+        razorpayOrderId: razorpayOrder.id,
+        status: "CREATED",
+        checkoutMode: isBuyNow ? "BUY_NOW" : "CART",
+        items: paymentAttemptItems,
+      };
+
+      if (isBuyNow) {
+        attemptData.product = paymentAttemptItems[0].product;
+        attemptData.variantId = paymentAttemptItems[0].variantId;
+        attemptData.quantity = paymentAttemptItems[0].quantity;
+      }
+
+      const attempts = await PaymentAttempt.create([attemptData], { session });
+
+      createdAttempt = attempts[0];
+    });
+
+    // 6. Return payment details only after reservation succeeds
+    return res.status(201).json({
+      success: true,
+      message: "Stock reserved and Razorpay order created",
+      data: {
+        paymentAttemptId: createdAttempt._id,
+        razorpayOrderId: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+      },
+    });
+  } catch (error) {
+    console.error("Create Razorpay Order Error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Unable to initiate payment",
+    });
+  } finally {
+    await session.endSession();
+  }
 };
 
-
 exports.verifyRazorpayPayment = async (req, res) => {
-    const totalStartedAt = Date.now();
+  const totalStartedAt = Date.now();
 
-    // Log duration even if a request returns early or throws an error.
-    const timed = async (label, callback) => {
-        const startedAt = Date.now();
-
-        try {
-            return await callback();
-        } finally {
-            console.log(
-                `[PAYMENT TIMING] ${label}: ${Date.now() - startedAt} ms`
-            );
-        }
-    };
+  // Log duration even if a request returns early or throws an error.
+  const timed = async (label, callback) => {
+    const startedAt = Date.now();
 
     try {
-        const userId = req.user?.userId;
+      return await callback();
+    } finally {
+      console.log(`[PAYMENT TIMING] ${label}: ${Date.now() - startedAt} ms`);
+    }
+  };
 
-        const {
-            paymentAttemptId,
-            razorpay_order_id,
-            razorpay_payment_id,
-            razorpay_signature
-        } = req.body;
+  try {
+    const userId = req.user?.userId;
 
-        if (!userId) {
-            return res.status(401).json({
-                success: false,
-                message: "Please login first"
-            });
-        }
+    const {
+      paymentAttemptId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body;
 
-        if (
-            !paymentAttemptId ||
-            !razorpay_order_id ||
-            !razorpay_payment_id ||
-            !razorpay_signature
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Required payment details are missing"
-            });
-        }
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Please login first",
+      });
+    }
 
-        // 1. Payment attempt database lookup
-        const attempt = await timed(
-            "PAYMENT_ATTEMPT_LOOKUP",
-            () => PaymentAttempt.findOne({
-                _id: paymentAttemptId,
-                user: userId,
-                razorpayOrderId: razorpay_order_id
-            })
+    if (
+      !paymentAttemptId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Required payment details are missing",
+      });
+    }
+
+    // 1. Payment attempt database lookup
+    const attempt = await timed("PAYMENT_ATTEMPT_LOOKUP", () =>
+      PaymentAttempt.findOne({
+        _id: paymentAttemptId,
+        user: userId,
+        razorpayOrderId: razorpay_order_id,
+      }),
+    );
+
+    if (!attempt) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment attempt not found",
+      });
+    }
+
+    // Return the existing order if already completed.
+    if (attempt.status === "ORDER_CREATED") {
+      return res.status(200).json({
+        success: true,
+        message: "Payment and order already completed",
+        data: {
+          paymentAttemptId: attempt._id,
+          status: "ORDER_CREATED",
+          orderId: attempt.order || null,
+        },
+      });
+    }
+
+    if (!["CREATED", "PAID"].includes(attempt.status)) {
+      return res.status(409).json({
+        success: false,
+        message: "This payment attempt cannot be processed",
+        status: attempt.status,
+      });
+    }
+
+    // 2. Verify Razorpay signature on the server.
+    const signatureStartedAt = Date.now();
+
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${attempt.razorpayOrderId}|${razorpay_payment_id}`)
+      .digest("hex");
+
+    const expectedBuffer = Buffer.from(expectedSignature);
+    const receivedBuffer = Buffer.from(razorpay_signature);
+
+    console.log(
+      `[PAYMENT TIMING] SIGNATURE_VERIFICATION: ${
+        Date.now() - signatureStartedAt
+      } ms`,
+    );
+
+    if (
+      expectedBuffer.length !== receivedBuffer.length ||
+      !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment signature",
+      });
+    }
+
+    // 3. Fetch payment details from Razorpay.
+    const payment = await timed("RAZORPAY_PAYMENT_FETCH", () =>
+      razorpay.payments.fetch(razorpay_payment_id),
+    );
+
+    if (
+      payment.order_id !== attempt.razorpayOrderId ||
+      payment.amount !== Math.round(attempt.amount * 100) ||
+      payment.currency !== attempt.currency
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment details do not match the payment attempt",
+      });
+    }
+
+    if (payment.status !== "captured") {
+      return res.status(409).json({
+        success: false,
+        message: "Payment is not captured yet",
+        paymentStatus: payment.status,
+      });
+    }
+
+    // 4. Mark the payment attempt as PAID.
+    if (attempt.status === "CREATED") {
+      const updatedAttempt = await timed("MARK_PAYMENT_PAID", () =>
+        PaymentAttempt.findOneAndUpdate(
+          {
+            _id: attempt._id,
+            user: userId,
+            status: "CREATED",
+          },
+          {
+            $set: {
+              status: "PAID",
+              razorpayPaymentId: razorpay_payment_id,
+            },
+          },
+          { new: true },
+        ),
+      );
+
+      if (!updatedAttempt) {
+        const latest = await timed("RECHECK_PAYMENT_ATTEMPT", () =>
+          PaymentAttempt.findById(attempt._id),
         );
 
-        if (!attempt) {
-            return res.status(404).json({
-                success: false,
-                message: "Payment attempt not found"
-            });
+        if (latest?.status === "ORDER_CREATED") {
+          return res.status(200).json({
+            success: true,
+            message: "Order already created",
+            data: {
+              paymentAttemptId: latest._id,
+              status: latest.status,
+              orderId: latest.order || null,
+            },
+          });
         }
 
-        // Return the existing order if already completed.
-        if (attempt.status === "ORDER_CREATED") {
-            return res.status(200).json({
-                success: true,
-                message: "Payment and order already completed",
-                data: {
-                    paymentAttemptId: attempt._id,
-                    status: "ORDER_CREATED",
-                    orderId: attempt.order || null
-                }
-            });
+        if (latest?.status !== "PAID") {
+          return res.status(409).json({
+            success: false,
+            message: "Payment attempt is being processed",
+            status: latest?.status,
+          });
         }
+      }
+    }
 
-        if (!["CREATED", "PAID"].includes(attempt.status)) {
-            return res.status(409).json({
-                success: false,
-                message: "This payment attempt cannot be processed",
-                status: attempt.status
-            });
-        }
+    // 5. Check whether the order already exists.
+    let order = await timed("EXISTING_ORDER_LOOKUP", () =>
+      Order.findOne({
+        razorpayOrderId: attempt.razorpayOrderId,
+      }),
+    );
 
-        // 2. Verify Razorpay signature on the server.
-        const signatureStartedAt = Date.now();
+    if (!order) {
+      /*
+       * Build order items:
+       * - Cart attempts use attempt.items.
+       * - Buy Now attempts use product, variantId, quantity.
+       */
+      let orderItems = [];
 
-        const expectedSignature = crypto
-            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-            .update(
-                `${attempt.razorpayOrderId}|${razorpay_payment_id}`
-            )
-            .digest("hex");
+      if (Array.isArray(attempt.items) && attempt.items.length > 0) {
+        orderItems = attempt.items.map((item) => ({
+          product: item.product,
+          variant: item.variantId,
+          quantity: item.quantity,
 
-        const expectedBuffer = Buffer.from(expectedSignature);
-        const receivedBuffer = Buffer.from(razorpay_signature);
+          // PaymentAttempt snapshots
+          productSnapshot: item.productSnapshot,
+          variantSnapshot: item.variantSnapshot,
+          pricingSnapshot: item.pricingSnapshot,
 
-        console.log(
-            `[PAYMENT TIMING] SIGNATURE_VERIFICATION: ${Date.now() - signatureStartedAt
-            } ms`
-        );
+          // Saved prices
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+        }));
+      } else if (
+        attempt.product &&
+        attempt.variantId &&
+        Number(attempt.quantity) >= 1
+      ) {
+        orderItems = [
+          {
+            product: attempt.product,
+            variant: attempt.variantId,
+            quantity: attempt.quantity,
+          },
+        ];
+      }
 
-        if (
-            expectedBuffer.length !== receivedBuffer.length ||
-            !crypto.timingSafeEqual(
-                expectedBuffer,
-                receivedBuffer
-            )
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid payment signature"
-            });
-        }
+      if (!orderItems.length) {
+        console.error("Payment attempt has no valid order items:", attempt._id);
 
-        // 3. Fetch payment details from Razorpay.
-        const payment = await timed(
-            "RAZORPAY_PAYMENT_FETCH",
-            () => razorpay.payments.fetch(razorpay_payment_id)
-        );
+        return res.status(500).json({
+          success: false,
+          message: "Payment verified, but order items could not be recovered",
+          data: {
+            paymentAttemptId: attempt._id,
+            status: "PAID",
+          },
+        });
+      }
 
-        if (
-            payment.order_id !== attempt.razorpayOrderId ||
-            payment.amount !== Math.round(attempt.amount * 100) ||
-            payment.currency !== attempt.currency
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Payment details do not match the payment attempt"
-            });
-        }
+      // Reuse existing order creation and stock allocation logic.
+      let orderResponse;
+      let responseStatus = 200;
 
-        if (payment.status !== "captured") {
-            return res.status(409).json({
-                success: false,
-                message: "Payment is not captured yet",
-                paymentStatus: payment.status
-            });
-        }
+      const internalReq = {
+        user: req.user,
+        body: {
+          orderSource: "ONLINE",
+          user: userId,
+          address: attempt.address,
+          items: orderItems,
+          paymentMethod: "ONLINE",
+          razorpayOrderId: attempt.razorpayOrderId,
+          razorpayPaymentId: razorpay_payment_id,
+          paymentAttemptId: attempt._id,
+        },
+      };
 
-        // 4. Mark the payment attempt as PAID.
-        if (attempt.status === "CREATED") {
-            const updatedAttempt = await timed(
-                "MARK_PAYMENT_PAID",
-                () => PaymentAttempt.findOneAndUpdate(
-                    {
-                        _id: attempt._id,
-                        user: userId,
-                        status: "CREATED"
-                    },
-                    {
-                        $set: {
-                            status: "PAID",
-                            razorpayPaymentId: razorpay_payment_id
-                        }
-                    },
-                    { new: true }
-                )
-            );
+      const internalRes = {
+        status(code) {
+          responseStatus = code;
+          return this;
+        },
+        json(body) {
+          orderResponse = body;
+          return this;
+        },
+      };
 
-            if (!updatedAttempt) {
-                const latest = await timed(
-                    "RECHECK_PAYMENT_ATTEMPT",
-                    () => PaymentAttempt.findById(attempt._id)
-                );
+      // 6. Measure the entire existing createOrder controller.
+      await timed("CREATE_ORDER_TOTAL", () =>
+        exports.createOrder(internalReq, internalRes),
+      );
 
-                if (latest?.status === "ORDER_CREATED") {
-                    return res.status(200).json({
-                        success: true,
-                        message: "Order already created",
-                        data: {
-                            paymentAttemptId: latest._id,
-                            status: latest.status,
-                            orderId: latest.order || null
-                        }
-                    });
-                }
-
-                if (latest?.status !== "PAID") {
-                    return res.status(409).json({
-                        success: false,
-                        message: "Payment attempt is being processed",
-                        status: latest?.status
-                    });
-                }
-            }
-        }
-
-        // 5. Check whether the order already exists.
-        let order = await timed(
-            "EXISTING_ORDER_LOOKUP",
-            () => Order.findOne({
-                razorpayOrderId: attempt.razorpayOrderId
-            })
+      if (
+        responseStatus >= 400 ||
+        !orderResponse?.success ||
+        !orderResponse?.data?._id
+      ) {
+        // Recover if a concurrent request created the order.
+        order = await timed("ORDER_RECOVERY_LOOKUP", () =>
+          Order.findOne({
+            razorpayOrderId: attempt.razorpayOrderId,
+          }),
         );
 
         if (!order) {
-            /*
-             * Build order items:
-             * - Cart attempts use attempt.items.
-             * - Buy Now attempts use product, variantId, quantity.
-             */
-            let orderItems = [];
+          console.error("Order creation after payment failed:", orderResponse);
 
-            if (
-                Array.isArray(attempt.items) &&
-                attempt.items.length > 0
-            ) {
-                orderItems = attempt.items.map(item => ({
-                    product: item.product,
-                    variant: item.variantId,
-                    quantity: item.quantity,
-
-                    // PaymentAttempt snapshots
-                    productSnapshot: item.productSnapshot,
-                    variantSnapshot: item.variantSnapshot,
-                    pricingSnapshot: item.pricingSnapshot,
-
-                    // Saved prices
-                    unitPrice: item.unitPrice,
-                    totalPrice: item.totalPrice
-                }));
-            } else if (
-                attempt.product &&
-                attempt.variantId &&
-                Number(attempt.quantity) >= 1
-            ) {
-                orderItems = [{
-                    product: attempt.product,
-                    variant: attempt.variantId,
-                    quantity: attempt.quantity
-                }];
-            }
-
-            if (!orderItems.length) {
-                console.error(
-                    "Payment attempt has no valid order items:",
-                    attempt._id
-                );
-
-                return res.status(500).json({
-                    success: false,
-                    message:
-                        "Payment verified, but order items could not be recovered",
-                    data: {
-                        paymentAttemptId: attempt._id,
-                        status: "PAID"
-                    }
-                });
-            }
-
-            // Reuse existing order creation and stock allocation logic.
-            let orderResponse;
-            let responseStatus = 200;
-
-            const internalReq = {
-                user: req.user,
-                body: {
-                    orderSource: "ONLINE",
-                    user: userId,
-                    address: attempt.address,
-                    items: orderItems,
-                    paymentMethod: "ONLINE",
-                    razorpayOrderId: attempt.razorpayOrderId,
-                    razorpayPaymentId: razorpay_payment_id,
-                    paymentAttemptId: attempt._id
-                }
-            };
-
-            const internalRes = {
-                status(code) {
-                    responseStatus = code;
-                    return this;
-                },
-                json(body) {
-                    orderResponse = body;
-                    return this;
-                }
-            };
-
-            // 6. Measure the entire existing createOrder controller.
-            await timed(
-                "CREATE_ORDER_TOTAL",
-                () => exports.createOrder(internalReq, internalRes)
-            );
-
-            if (
-                responseStatus >= 400 ||
-                !orderResponse?.success ||
-                !orderResponse?.data?._id
-            ) {
-                // Recover if a concurrent request created the order.
-                order = await timed(
-                    "ORDER_RECOVERY_LOOKUP",
-                    () => Order.findOne({
-                        razorpayOrderId: attempt.razorpayOrderId
-                    })
-                );
-
-                if (!order) {
-                    console.error(
-                        "Order creation after payment failed:",
-                        orderResponse
-                    );
-
-                    return res.status(500).json({
-                        success: false,
-                        message:
-                            orderResponse?.message ||
-                            "Payment verified, but order creation failed",
-                        data: {
-                            paymentAttemptId: attempt._id,
-                            status: "PAID"
-                        }
-                    });
-                }
-            } else {
-                order = orderResponse.data;
-            }
-        }
-
-        // 7. Save the final order reference on the payment attempt.
-        const completedAttempt = await timed(
-            "MARK_ORDER_CREATED",
-            () => PaymentAttempt.findOneAndUpdate(
-                {
-                    _id: attempt._id,
-                    user: userId,
-                    status: "PAID"
-                },
-                {
-                    $set: {
-                        status: "ORDER_CREATED",
-                        razorpayPaymentId: razorpay_payment_id,
-                        order: order._id
-                    }
-                },
-                { new: true }
-            )
-        );
-
-        if (!completedAttempt) {
-            const latest = await timed(
-                "FINAL_ATTEMPT_RECHECK",
-                () => PaymentAttempt.findById(attempt._id)
-            );
-
-            if (latest?.status !== "ORDER_CREATED") {
-                return res.status(500).json({
-                    success: false,
-                    message:
-                        "Order exists, but payment attempt update is pending",
-                    data: {
-                        orderId: order._id,
-                        status: latest?.status
-                    }
-                });
-            }
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: "Payment verified and order created successfully",
-            data: {
-                paymentAttemptId: attempt._id,
-                razorpayOrderId: attempt.razorpayOrderId,
-                razorpayPaymentId: razorpay_payment_id,
-                status: "ORDER_CREATED",
-                orderId: order._id
-            }
-        });
-
-    } catch (error) {
-        console.error(
-            "Razorpay Verification / Order Creation Error:",
-            error
-        );
-
-        return res.status(500).json({
+          return res.status(500).json({
             success: false,
             message:
-                "Payment was received, but order processing needs attention"
-        });
-
-    } finally {
-        console.log(
-            `[PAYMENT TIMING] VERIFY_PAYMENT_TOTAL: ${Date.now() - totalStartedAt
-            } ms`
-        );
+              orderResponse?.message ||
+              "Payment verified, but order creation failed",
+            data: {
+              paymentAttemptId: attempt._id,
+              status: "PAID",
+            },
+          });
+        }
+      } else {
+        order = orderResponse.data;
+      }
     }
+
+    // 7. Save the final order reference on the payment attempt.
+    const completedAttempt = await timed("MARK_ORDER_CREATED", () =>
+      PaymentAttempt.findOneAndUpdate(
+        {
+          _id: attempt._id,
+          user: userId,
+          status: "PAID",
+        },
+        {
+          $set: {
+            status: "ORDER_CREATED",
+            razorpayPaymentId: razorpay_payment_id,
+            order: order._id,
+          },
+        },
+        { new: true },
+      ),
+    );
+
+    if (!completedAttempt) {
+      const latest = await timed("FINAL_ATTEMPT_RECHECK", () =>
+        PaymentAttempt.findById(attempt._id),
+      );
+
+      if (latest?.status !== "ORDER_CREATED") {
+        return res.status(500).json({
+          success: false,
+          message: "Order exists, but payment attempt update is pending",
+          data: {
+            orderId: order._id,
+            status: latest?.status,
+          },
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment verified and order created successfully",
+      data: {
+        paymentAttemptId: attempt._id,
+        razorpayOrderId: attempt.razorpayOrderId,
+        razorpayPaymentId: razorpay_payment_id,
+        status: "ORDER_CREATED",
+        orderId: order._id,
+      },
+    });
+  } catch (error) {
+    console.error("Razorpay Verification / Order Creation Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Payment was received, but order processing needs attention",
+    });
+  } finally {
+    console.log(
+      `[PAYMENT TIMING] VERIFY_PAYMENT_TOTAL: ${
+        Date.now() - totalStartedAt
+      } ms`,
+    );
+  }
 };
 
-
 exports.createOrder = async (req, res) => {
-    let session = null;
+  let session = null;
 
-    try {
-        session = await mongoose.startSession();
-        session.startTransaction();
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
 
-        // ==================================================
-        // 1. BASIC VALIDATION
-        // ==================================================
+    const {
+      orderSource,
+      user: userId,
+      address: addressId,
+      items,
+      paymentMethod,
+      razorpayOrderId,
+      razorpayPaymentId,
+      paymentAttemptId,
+      branch,
+      subBranch,
+      createdBy,
+      customerDetails,
+      discountAmount = 0,
+      couponCode = "",
+      shippingCharge = 0,
+      gstAmount = 0,
+    } = req.body;
 
-        const {
-            orderSource,
-            user: userId,
-            address: addressId,
-            items,
-            paymentMethod,
-            razorpayOrderId,
-            razorpayPaymentId,
-            paymentAttemptId,
-            branch,
-            subBranch,
-            createdBy,
-            customerDetails,
-            discountAmount = 0,
-            couponCode = "",
-            shippingCharge = 0,
-            gstAmount = 0
-        } = req.body;
+    // 1. DUPLICATE ORDER CHECK
+    if (razorpayOrderId) {
+      const existingOrder = await Order.findOne({
+        razorpayOrderId,
+      }).session(session);
 
-        // Prevent duplicate orders for the same Razorpay order.
-        if (razorpayOrderId) {
-            const existingOrder = await Order.findOne({
-                razorpayOrderId
-            }).session(session);
+      if (existingOrder) {
+        await session.abortTransaction();
 
-            if (existingOrder) {
-                await session.abortTransaction();
+        return res.status(200).json({
+          success: true,
+          message: "Order already exists for this payment",
+          data: existingOrder,
+        });
+      }
+    }
 
-                return res.status(200).json({
-                    success: true,
-                    message: "Order already exists for this payment",
-                    data: existingOrder
-                });
-            }
+    if (!["ONLINE", "BRANCH", "SUB_BRANCH"].includes(orderSource)) {
+      throw new Error("Invalid order source");
+    }
+
+    if (!paymentMethod || !items) {
+      throw new Error("Payment method and items are required");
+    }
+
+    // 2. PARSE ITEMS
+    let parsedItems = items;
+
+    if (typeof items === "string") {
+      parsedItems = JSON.parse(items);
+    }
+
+    if (!Array.isArray(parsedItems) || !parsedItems.length) {
+      throw new Error("At least one order item is required");
+    }
+
+    // 3. CUSTOMER VALIDATION
+    let user = null;
+    let address = null;
+    let paymentAttempt = null;
+
+    if (orderSource === "ONLINE") {
+      if (!paymentAttemptId) {
+        throw new Error("Payment attempt ID is required");
+      }
+
+      paymentAttempt =
+        await PaymentAttempt.findById(paymentAttemptId).session(session);
+
+      if (!paymentAttempt) {
+        throw new Error("Payment attempt not found");
+      }
+
+      if (paymentAttempt.status !== "PAID") {
+        throw new Error("Payment is not completed");
+      }
+
+      if (paymentAttempt.razorpayOrderId !== razorpayOrderId) {
+        throw new Error("Razorpay order ID mismatch");
+      }
+
+      if (
+        paymentAttempt.razorpayPaymentId &&
+        paymentAttempt.razorpayPaymentId !== razorpayPaymentId
+      ) {
+        throw new Error("Razorpay payment ID mismatch");
+      }
+
+      if (userId) {
+        user = await User.findById(userId).session(session);
+      }
+
+      if (addressId) {
+        address = await Address.findById(addressId).session(session);
+      }
+    }
+
+    // 4. BRANCH VALIDATION
+    if (orderSource === "BRANCH") {
+      if (!branch || !(await Admin.findById(branch).session(session))) {
+        throw new Error("Valid branch admin is required");
+      }
+    }
+
+    if (orderSource === "SUB_BRANCH") {
+      if (!subBranch || !(await Admin.findById(subBranch).session(session))) {
+        throw new Error("Valid sub branch admin is required");
+      }
+    }
+
+    if (createdBy && !(await Admin.findById(createdBy).session(session))) {
+      throw new Error("Created by admin not found");
+    }
+
+    // 5. ORDER NUMBERS
+    const timestamp = Date.now();
+    const orderNumber = `ORD-${timestamp}`;
+    const invoiceNumber = `INV-${timestamp}`;
+
+    // 6. ADDRESS SNAPSHOT
+    let addressSnapshot = null;
+
+    if (address) {
+      addressSnapshot = {
+        fullName: address.fullName,
+        phone: address.phone,
+        alternatePhone: address.alternatePhone,
+        addressLine1: address.addressLine1,
+        addressLine2: address.addressLine2,
+        landmark: address.landmark,
+        city: address.city,
+        state: address.state,
+        country: address.country,
+        postalCode: address.postalCode,
+      };
+    }
+
+    // 7. TOTALS
+    const orderItems = [];
+    let subTotal = 0;
+    let totalDiscount = Number(discountAmount) || 0;
+    let totalGst = Number(gstAmount) || 0;
+
+    // 8. PROCESS ITEMS
+    for (const item of parsedItems) {
+      if (!item.product || !item.variant) {
+        throw new Error("Product and variant are required");
+      }
+
+      const quantity = Number(item.quantity);
+
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        throw new Error("Invalid item quantity");
+      }
+
+      const product = await Product.findById(item.product).session(session);
+
+      if (!product) {
+        throw new Error(`Product not found: ${item.product}`);
+      }
+
+      const variant = product.variants.find(
+        (v) => v._id.toString() === item.variant.toString(),
+      );
+
+      if (!variant) {
+        throw new Error(`Variant not found for product ${product.name}`);
+      }
+
+      // FIND PAYMENT SNAPSHOT
+      const savedItem =
+        orderSource === "ONLINE"
+          ? paymentAttempt.items?.find(
+              (p) =>
+                p.product.toString() === product._id.toString() &&
+                p.variantId.toString() === variant._id.toString(),
+            )
+          : null;
+
+      if (orderSource === "ONLINE" && !savedItem) {
+        throw new Error(
+          `Payment item not found for ${product.name} - ${variant.sku}`,
+        );
+      }
+
+      let priceDetails;
+      let unitPrice;
+      let totalPrice;
+
+      // ✅ IMPORTANT: Declare before use
+      let stockAllocations = [];
+
+      if (orderSource === "ONLINE") {
+        // Use already reserved Supplier / Maker allocations.
+        if (
+          !Array.isArray(savedItem.stockAllocations) ||
+          savedItem.stockAllocations.length === 0
+        ) {
+          throw new Error(
+            `Missing stock reservation for ${product.name} - ${variant.sku}`,
+          );
         }
 
-        if (!orderSource) {
-            throw new Error("Order source is required");
+        if (savedItem.stockReservationStatus !== "RESERVED") {
+          throw new Error(
+            `Stock reservation is not active for ${product.name} - ${variant.sku}`,
+          );
         }
 
-        if (!["ONLINE", "BRANCH", "SUB_BRANCH"].includes(orderSource)) {
-            throw new Error("Invalid order source");
-        }
-
-        if (!paymentMethod) {
-            throw new Error("Payment method is required");
-        }
-
-        if (!items) {
-            throw new Error("Order items are required");
-        }
-
-        // ==================================================
-        // 2. PARSE ITEMS
-        // ==================================================
-
-        let parsedItems = items;
-
-        if (typeof items === "string") {
-            try {
-                parsedItems = JSON.parse(items);
-            } catch (error) {
-                throw new Error("Invalid items JSON");
-            }
-        }
-
-        if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
-            throw new Error("At least one order item is required");
-        }
-
-        // ==================================================
-        // 3. CUSTOMER VALIDATION
-        // ==================================================
-
-        let user = null;
-        let address = null;
-
-        if (orderSource === "ONLINE") {
-            if (!userId) {
-                throw new Error("User is required for online order");
-            }
-
-            if (!addressId) {
-                throw new Error("Address is required for online order");
-            }
-
-            user = await User.findById(userId).session(session);
-
-            if (!user) {
-                throw new Error("User not found");
-            }
-
-            address = await Address.findById(addressId).session(session);
-
-            if (!address) {
-                throw new Error("Address not found");
-            }
-        }
-        let paymentAttempt = null;
-
-        if (orderSource === "ONLINE") {
-
-            if (!paymentAttemptId) {
-                throw new Error("Payment attempt ID is required");
-            }
-
-            paymentAttempt = await PaymentAttempt.findOne({
-                _id: paymentAttemptId,
-                user: userId,
-                razorpayOrderId,
-                razorpayPaymentId,
-                status: "PAID"
-            }).session(session);
-
-            if (!paymentAttempt) {
-                throw new Error("Valid paid payment attempt not found");
-            }
-
-            if (Math.round(Number(paymentAttempt.amount) * 100) !==
-                Math.round(Number(paymentAttempt.amount) * 100)) {
-                throw new Error("Payment amount mismatch");
-            }
-        }
-        // ==================================================
-        // 4. BRANCH / SUB-BRANCH VALIDATION
-        // ==================================================
-
-        let branchAdmin = null;
-        let subBranchAdmin = null;
-        let createdByAdmin = null;
-
-        if (orderSource === "BRANCH") {
-            if (!branch) {
-                throw new Error("Branch is required");
-            }
-
-            branchAdmin = await Admin.findById(branch).session(session);
-
-            if (!branchAdmin) {
-                throw new Error("Branch admin not found");
-            }
-        }
-
-        if (orderSource === "SUB_BRANCH") {
-            if (!subBranch) {
-                throw new Error("Sub branch is required");
-            }
-
-            subBranchAdmin = await Admin.findById(subBranch).session(session);
-
-            if (!subBranchAdmin) {
-                throw new Error("Sub branch admin not found");
-            }
-        }
-
-        if (createdBy) {
-            createdByAdmin = await Admin.findById(createdBy).session(session);
-
-            if (!createdByAdmin) {
-                throw new Error("Created by admin not found");
-            }
-        }
-
-        // ==================================================
-        // 5. GENERATE ORDER NUMBER
-        // ==================================================
-
-        const timestamp = Date.now();
-
-        const orderNumber = `ORD-${timestamp}`;
-        const invoiceNumber = `INV-${timestamp}`;
-
-        // ==================================================
-        // 6. ADDRESS SNAPSHOT
-        // ==================================================
-
-        let addressSnapshot = null;
-
-        if (address) {
-            addressSnapshot = {
-                fullName: address.fullName,
-                phone: address.phone,
-                alternatePhone: address.alternatePhone,
-                addressLine1: address.addressLine1,
-                addressLine2: address.addressLine2,
-                landmark: address.landmark,
-                city: address.city,
-                state: address.state,
-                country: address.country,
-                postalCode: address.postalCode
+        stockAllocations = savedItem.stockAllocations.map((allocation) => {
+          if (allocation.sourceType === "SUPPLIER" && allocation.sourceItemId) {
+            return {
+              sourceType: "SUPPLIER",
+              supplierPurchaseItem: allocation.sourceItemId,
+              makerProductionItem: null,
+              quantity: Number(allocation.quantity),
             };
+          }
+
+          if (allocation.sourceType === "MAKER" && allocation.sourceItemId) {
+            return {
+              sourceType: "MAKER",
+              supplierPurchaseItem: null,
+              makerProductionItem: allocation.sourceItemId,
+              quantity: Number(allocation.quantity),
+            };
+          }
+
+          throw new Error("Invalid stock allocation source");
+        });
+
+        // Use payment-time locked pricing.
+        priceDetails = savedItem.pricingSnapshot;
+        unitPrice = Number(savedItem.unitPrice);
+        totalPrice = Number(savedItem.totalPrice);
+
+        if (!priceDetails || !unitPrice || !totalPrice) {
+          throw new Error(`Invalid saved pricing for ${product.name}`);
+        }
+      } else {
+        // BRANCH / SUB_BRANCH: Existing pricing logic.
+        if (Number(variant.stock) < quantity) {
+          throw new Error(`Insufficient stock for ${product.name}`);
         }
 
-        // ==================================================
-        // 7. PREPARE ORDER ITEMS
-        // ==================================================
+        priceDetails = await calculateVariantPrice(variant);
 
-        const orderItems = [];
+        if (!priceDetails) {
+          throw new Error(`Unable to calculate price for ${product.name}`);
+        }
 
-        let subTotal = 0;
-        let totalDiscount = Number(discountAmount) || 0;
-        let totalGst = Number(gstAmount) || 0;
+        unitPrice = Number(priceDetails.finalPrice) || 0;
+        totalPrice = unitPrice * quantity;
 
-        // ==================================================
-        // 8. PROCESS EVERY ITEM
-        // ==================================================
+        // FIFO allocation.
+        let remainingQuantity = quantity;
 
-        for (const item of parsedItems) {
-            if (!item.product) {
-                throw new Error("Product is required");
-            }
+        // SUPPLIER STOCK
+        const supplierItems = await SupplierPurchaseItem.find({
+          product: product._id,
+          variantId: variant._id,
+          availableQuantity: { $gt: 0 },
+        })
+          .sort({ createdAt: 1, _id: 1 })
+          .session(session);
 
-            if (!item.variant) {
-                throw new Error("Variant is required");
-            }
+        for (const supplierItem of supplierItems) {
+          if (remainingQuantity <= 0) break;
 
-            const quantity = Number(item.quantity) || 1;
+          const available = Number(supplierItem.availableQuantity) || 0;
 
-            if (!Number.isFinite(quantity) || quantity <= 0) {
-                throw new Error("Quantity must be greater than zero");
-            }
+          if (available <= 0) continue;
 
-            // Load product.
-            const product = await Product.findById(item.product)
-                .session(session);
+          const allocateQuantity = Math.min(remainingQuantity, available);
 
-            if (!product) {
-                throw new Error(`Product not found: ${item.product}`);
-            }
+          const updateResult = await SupplierPurchaseItem.updateOne(
+            {
+              _id: supplierItem._id,
+              availableQuantity: { $gte: allocateQuantity },
+            },
+            {
+              $inc: {
+                availableQuantity: -allocateQuantity,
+              },
+            },
+            { session },
+          );
 
-            // Find the embedded variant.
-            const variant = product.variants.find(
-                v => v._id.toString() === item.variant.toString()
+          if (updateResult.modifiedCount !== 1) {
+            throw new Error(
+              `Supplier stock changed for ${product.name} - ${variant.sku}`,
+            );
+          }
+
+          stockAllocations.push({
+            sourceType: "SUPPLIER",
+            supplierPurchaseItem: supplierItem._id,
+            makerProductionItem: null,
+            quantity: allocateQuantity,
+          });
+
+          remainingQuantity -= allocateQuantity;
+        }
+
+        // MAKER STOCK
+        if (remainingQuantity > 0) {
+          const makerItems = await MakerProductionItem.find({
+            product: product._id,
+            variantId: variant._id,
+            availableQuantity: { $gt: 0 },
+          })
+            .sort({ createdAt: 1, _id: 1 })
+            .session(session);
+
+          for (const makerItem of makerItems) {
+            if (remainingQuantity <= 0) break;
+
+            const available = Number(makerItem.availableQuantity) || 0;
+
+            if (available <= 0) continue;
+
+            const allocateQuantity = Math.min(remainingQuantity, available);
+
+            const updateResult = await MakerProductionItem.updateOne(
+              {
+                _id: makerItem._id,
+                availableQuantity: { $gte: allocateQuantity },
+              },
+              {
+                $inc: {
+                  availableQuantity: -allocateQuantity,
+                },
+              },
+              { session },
             );
 
-            if (!variant) {
-                throw new Error(
-                    `Variant not found for product ${product.name}`
-                );
+            if (updateResult.modifiedCount !== 1) {
+              throw new Error(
+                `Maker stock changed for ${product.name} - ${variant.sku}`,
+              );
             }
 
-            // Check aggregate product stock.
-            if (Number(variant.stock) < quantity) {
-                throw new Error(
-                    `Insufficient stock for ${product.name}`
-                );
-            }
-
-            let priceDetails;
-            let unitPrice;
-            let totalPrice;
-
-            if (orderSource === "ONLINE") {
-
-                const savedItem = paymentAttempt.items?.find(
-                    p =>
-                        p.product.toString() === product._id.toString() &&
-                        p.variantId === variant._id.toString()
-                );
-
-                if (!savedItem) {
-                    throw new Error("Payment item snapshot not found");
-                }
-
-                if (
-                    Number(savedItem.quantity) !== quantity ||
-                    !Number.isFinite(Number(savedItem.unitPrice)) ||
-                    !Number.isFinite(Number(savedItem.totalPrice)) ||
-                    Number(savedItem.unitPrice) <= 0 ||
-                    Number(savedItem.totalPrice) <= 0
-                ) {
-                    throw new Error("Invalid payment item pricing");
-                }
-
-                priceDetails = savedItem.pricingSnapshot;
-                unitPrice = Number(savedItem.unitPrice);
-                totalPrice = Number(savedItem.totalPrice);
-
-            } else {
-
-                priceDetails = await calculateVariantPrice(variant);
-
-                if (!priceDetails) {
-                    throw new Error(
-                        `Unable to calculate price for ${product.name}`
-                    );
-                }
-
-                unitPrice = Number(priceDetails.finalPrice) || 0;
-                totalPrice = unitPrice * quantity;
-            }
-
-            // Stone weight.
-            const stoneWeight = variant.stones?.reduce(
-                (total, stone) =>
-                    total + (Number(stone.totalWeight) || 0),
-                0
-            ) || 0;
-
-            // Diamond weight.
-            const diamondWeight = variant.stones
-                ?.filter(stone => stone.stoneType === "diamond")
-                .reduce(
-                    (total, stone) =>
-                        total + (Number(stone.totalWeight) || 0),
-                    0
-                ) || 0;
-
-            // Product snapshot.
-            // Product snapshot.
-            const savedItem = orderSource === "ONLINE"
-                ? paymentAttempt.items.find(
-                    p =>
-                        p.product.toString() === product._id.toString() &&
-                        p.variantId === variant._id.toString()
-                )
-                : null;
-
-            const productSnapshot = savedItem?.productSnapshot || {
-                name: product.name,
-                slug: product.slug,
-                image: product.images?.[0] || null,
-                category: product.category?.toString() || null,
-                subCategory: product.subCategory?.toString() || null,
-                subSubCategory: product.subSubCategory?.toString() || null,
-                productType: product.productType,
-                brand: product.brand || ""
-            };
-            // Stones snapshot.
-            const stonesSnapshot = variant.stones?.map(stone => ({
-                stoneType: stone.stoneType,
-                stoneCategory: stone.stoneCategory,
-                quality: stone.quality,
-                quantity: Number(stone.quantity) || 0,
-                totalWeight: Number(stone.totalWeight) || 0,
-                stoneValue: Number(stone.stoneValue) || 0
-            })) || [];
-
-            // Variant snapshot.
-            const variantSnapshot = savedItem?.variantSnapshot || {
-                sku: variant.sku,
-                metalType: variant.metalType,
-                purity: variant.metalPurity,
-                metalColor: variant.metalColor,
-                size: variant.size,
-                grossWeight: Number(variant.grossWeight) || 0,
-                netWeight: Number(variant.netWeight) || 0,
-                wastagePercentage: Number(variant.wastagePercentage) || 0,
-                stoneWeight,
-                diamondWeight,
-                makingCharge: Number(variant.makingCharges) || 0,
-                makingChargeType: variant.makingChargeType,
-                discountPercentage: Number(variant.discountPercentage) || 0,
-                stoneType: stonesSnapshot?.[0]?.stoneType || null,
-                gender: product.gender || null,
-                stones: stonesSnapshot
-            };
-
-            // Pricing snapshot.
-            const pricingSnapshot = savedItem?.pricingSnapshot || {
-                goldRate: Number(priceDetails.goldRate) || 0,
-                goldValue: Number(priceDetails.goldValue) || 0,
-                wastageAmount: Number(priceDetails.wastageAmount) || 0,
-                stoneValue: Number(priceDetails.stoneValue) || 0,
-                diamondValue: Number(priceDetails.diamondValue) || 0,
-                makingCharge: Number(priceDetails.makingCharge) || 0,
-                discountAmount: Number(priceDetails.discountAmount) || 0,
-                gstPercentage: Number(priceDetails.gstPercentage) || 0,
-                gstAmount: Number(priceDetails.gstAmount) || 0,
-                finalPrice: unitPrice
-            };
-
-            // ==============================================
-            // SOURCE STOCK ALLOCATION
-            // FIFO: Supplier stock first, then maker stock.
-            // ==============================================
-
-            let remainingQuantity = quantity;
-            const stockAllocations = [];
-
-            // Supplier stock.
-            const supplierItems = await SupplierPurchaseItem.find({
-                product: product._id,
-                variantId: variant._id,
-                availableQuantity: { $gt: 0 }
-            })
-                .populate({
-                    path: "purchase",
-                    select: "purchaseDate invoiceNumber"
-                })
-                .sort({ createdAt: 1 })
-                .session(session);
-            console.log("PRODUCT ID:", product._id.toString());
-            console.log("VARIANT ID:", variant._id.toString());
-            console.log("ORDER QUANTITY:", quantity);
-
-            console.log("SUPPLIER ITEMS:", supplierItems.map(item => ({
-                product: item.product?.toString(),
-                variantId: item.variantId?.toString(),
-                availableQuantity: item.availableQuantity
-            })));
-            for (const supplierItem of supplierItems) {
-                if (remainingQuantity <= 0) {
-                    break;
-                }
-
-                const available =
-                    Number(supplierItem.availableQuantity) || 0;
-
-                if (available <= 0) {
-                    continue;
-                }
-
-                const allocateQuantity = Math.min(
-                    remainingQuantity,
-                    available
-                );
-
-                supplierItem.availableQuantity =
-                    available - allocateQuantity;
-
-                await supplierItem.save({ session });
-
-                stockAllocations.push({
-                    sourceType: "SUPPLIER",
-                    supplierPurchaseItem: supplierItem._id,
-                    makerProductionItem: null,
-                    quantity: allocateQuantity
-                });
-
-                remainingQuantity -= allocateQuantity;
-            }
-
-            // Maker stock if supplier stock is insufficient.
-            if (remainingQuantity > 0) {
-                const makerItems = await MakerProductionItem.find({
-                    product: product._id,
-                    variantId: variant._id,
-                    availableQuantity: { $gt: 0 }
-                })
-                    .populate({
-                        path: "production",
-                        select: "issueDate productionNumber"
-                    })
-                    .sort({ createdAt: 1 })
-                    .session(session);
-
-                for (const makerItem of makerItems) {
-                    if (remainingQuantity <= 0) {
-                        break;
-                    }
-
-                    const available =
-                        Number(makerItem.availableQuantity) || 0;
-
-                    if (available <= 0) {
-                        continue;
-                    }
-
-                    const allocateQuantity = Math.min(
-                        remainingQuantity,
-                        available
-                    );
-
-                    makerItem.availableQuantity =
-                        available - allocateQuantity;
-
-                    await makerItem.save({ session });
-
-                    stockAllocations.push({
-                        sourceType: "MAKER",
-                        supplierPurchaseItem: null,
-                        makerProductionItem: makerItem._id,
-                        quantity: allocateQuantity
-                    });
-
-                    remainingQuantity -= allocateQuantity;
-                }
-            }
-
-            // Ensure source stock covers the order quantity.
-            if (remainingQuantity > 0) {
-                throw new Error(
-                    `Source stock unavailable for ${product.name} - SKU ${variant.sku}`
-                );
-            }
-
-            // Decrease aggregate product variant stock.
-            variant.stock = Number(variant.stock) - quantity;
-
-            if (variant.stock < 0) {
-                throw new Error(
-                    `Invalid stock calculation for ${product.name}`
-                );
-            }
-
-            await product.save({ session });
-
-            // Create order item.
-            orderItems.push({
-                product: product._id,
-                variant: variant._id,
-                productSnapshot,
-                stockAllocations,
-                variantSnapshot,
-                pricingSnapshot,
-                quantity,
-                unitPrice,
-                totalPrice
+            stockAllocations.push({
+              sourceType: "MAKER",
+              supplierPurchaseItem: null,
+              makerProductionItem: makerItem._id,
+              quantity: allocateQuantity,
             });
 
-            // Update totals.
-            subTotal += totalPrice;
-
-            totalGst +=
-                (Number(priceDetails.gstAmount) || 0) * quantity;
+            remainingQuantity -= allocateQuantity;
+          }
         }
 
-        // ==================================================
-        // 9. CALCULATE FINAL TOTAL
-        // ==================================================
-
-        const finalTotal =
-            subTotal -
-            totalDiscount +
-            Number(shippingCharge || 0);
-
-        if (!Number.isFinite(finalTotal) || finalTotal < 0) {
-            throw new Error("Invalid order total");
+        if (remainingQuantity > 0) {
+          throw new Error(
+            `Source stock unavailable for ${product.name} - SKU ${variant.sku}`,
+          );
         }
 
-        // ==================================================
-        // 10. PAYMENT STATUS
-        // ==================================================
+        // Deduct aggregate stock only for non-online orders.
+        variant.stock = Number(variant.stock) - quantity;
 
-        let paymentStatus = "Pending";
-
-        if (
-            paymentMethod === "CASH" ||
-            paymentMethod === "UPI" ||
-            paymentMethod === "CARD" ||
-            paymentMethod === "ONLINE" ||
-            paymentMethod === "NETBANKING"
-        ) {
-            paymentStatus = "Paid";
+        if (variant.stock < 0) {
+          throw new Error(`Invalid stock calculation for ${product.name}`);
         }
 
-        if (paymentMethod === "COD") {
-            paymentStatus = "Pending";
-        }
+        await product.save({ session });
+      }
 
-        // ==================================================
-        // 11. ORDER STATUS
-        // ==================================================
+      // STONE WEIGHTS
+      const stoneWeight =
+        variant.stones?.reduce(
+          (total, stone) => total + (Number(stone.totalWeight) || 0),
+          0,
+        ) || 0;
 
-        const orderStatus = "Confirmed";
+      const diamondWeight =
+        variant.stones
+          ?.filter((stone) => stone.stoneType === "diamond")
+          .reduce(
+            (total, stone) => total + (Number(stone.totalWeight) || 0),
+            0,
+          ) || 0;
 
-        // ==================================================
-        // 12. CUSTOMER DETAILS
-        // ==================================================
+      // PRODUCT SNAPSHOT
+      const productSnapshot = savedItem?.productSnapshot || {
+        name: product.name,
+        slug: product.slug,
+        image: product.images?.[0] || null,
+        category: product.category?.toString() || null,
+        subCategory: product.subCategory?.toString() || null,
+        subSubCategory: product.subSubCategory?.toString() || null,
+        productType: product.productType,
+        brand: product.brand || "",
+      };
 
-        let finalCustomerDetails = customerDetails || {};
+      // STONES SNAPSHOT
+      const stonesSnapshot =
+        variant.stones?.map((stone) => ({
+          stoneType: stone.stoneType,
+          stoneCategory: stone.stoneCategory,
+          quality: stone.quality,
+          quantity: Number(stone.quantity) || 0,
+          totalWeight: Number(stone.totalWeight) || 0,
+          stoneValue: Number(stone.stoneValue) || 0,
+        })) || [];
 
-        if (user) {
-            finalCustomerDetails = {
-                name: customerDetails?.name || user.name || "",
-                phone: customerDetails?.phone || user.phone || "",
-                email: customerDetails?.email || user.email || ""
-            };
-        }
+      // VARIANT SNAPSHOT
+      const variantSnapshot = savedItem?.variantSnapshot || {
+        sku: variant.sku,
+        metalType: variant.metalType,
+        purity: variant.metalPurity,
+        metalColor: variant.metalColor,
+        size: variant.size,
+        grossWeight: Number(variant.grossWeight) || 0,
+        netWeight: Number(variant.netWeight) || 0,
+        wastagePercentage: Number(variant.wastagePercentage) || 0,
+        stoneWeight,
+        diamondWeight,
+        makingCharge: Number(variant.makingCharges) || 0,
+        makingChargeType: variant.makingChargeType,
+        discountPercentage: Number(variant.discountPercentage) || 0,
+        stoneType: stonesSnapshot?.[0]?.stoneType || null,
+        gender: product.gender || null,
+        stones: stonesSnapshot,
+      };
 
-        // ==================================================
-        // 13. CREATE ORDER
-        // ==================================================
+      // PRICING SNAPSHOT
+      const pricingSnapshot = savedItem?.pricingSnapshot || {
+        goldRate: Number(priceDetails.goldRate) || 0,
+        goldValue: Number(priceDetails.goldValue) || 0,
+        wastageAmount: Number(priceDetails.wastageAmount) || 0,
+        stoneValue: Number(priceDetails.stoneValue) || 0,
+        diamondValue: Number(priceDetails.diamondValue) || 0,
+        makingCharge: Number(priceDetails.makingCharge) || 0,
+        discountAmount: Number(priceDetails.discountAmount) || 0,
+        gstPercentage: Number(priceDetails.gstPercentage) || 0,
+        gstAmount: Number(priceDetails.gstAmount) || 0,
+        finalPrice: unitPrice,
+      };
 
-        const order = new Order({
-            orderNumber,
-            invoiceNumber,
-            orderSource,
-            branch: branch || null,
-            subBranch: subBranch || null,
-            createdBy: createdBy || null,
-            user: user?._id || null,
-            customerDetails: finalCustomerDetails,
-            items: orderItems,
-            address: address?._id || null,
-            addressSnapshot,
-            paymentMethod,
-            paymentStatus,
-            subTotal,
-            discountAmount: totalDiscount,
-            couponCode,
-            shippingCharge: Number(shippingCharge) || 0,
-            gstAmount: totalGst,
-            totalAmount: finalTotal,
-            orderStatus,
-            billingStatus: "Completed",
-            statusHistory: [{
-                status: orderStatus,
-                updatedBy: createdBy || null,
-                remarks: "Order created",
-                updatedAt: new Date()
-            }],
-            invoiceDate: new Date(),
-            stockUpdated: true,
-            razorpayOrderId: razorpayOrderId || null,
-            razorpayPaymentId: razorpayPaymentId || null,
-            paymentHistory: razorpayPaymentId
-                ? [{
-                    method: "ONLINE",
-                    amount: finalTotal,
-                    transactionId: razorpayPaymentId,
-                    paymentGateway: "Razorpay",
-                    paidAt: new Date()
-                }]
-                : []
-        });
+      // CREATE ORDER ITEM
+      orderItems.push({
+        product: product._id,
+        variant: variant._id,
+        productSnapshot,
+        stockAllocations,
+        variantSnapshot,
+        pricingSnapshot,
+        quantity,
+        unitPrice,
+        totalPrice,
+      });
 
-        await order.save({ session });
-
-        // ==================================================
-        // 14. COMMIT TRANSACTION
-        // ==================================================
-
-        await session.commitTransaction();
-
-        // ==================================================
-        // 15. SEND INVOICE EMAIL WITHOUT BLOCKING RESPONSE
-        // ==================================================
-        // Order and stock updates are already committed.
-        // SMTP failure must not delay the order response.
-
-        if (user?.email && orderSource === "ONLINE") {
-            const emailAddress = user.email;
-            const savedOrder = order;
-
-            Promise.resolve()
-                .then(() => sendInvoiceEmail(emailAddress, savedOrder))
-                .catch((emailError) => {
-                    console.error(
-                        "Invoice email failed:",
-                        emailError.message
-                    );
-                });
-        }
-
-        // ==================================================
-        // 16. RESPONSE
-        // ==================================================
-
-        return res.status(201).json({
-            success: true,
-            message: "Order created successfully",
-            data: order
-        });
-
-    } catch (error) {
-        // Roll back only if the transaction is still active.
-        if (session?.inTransaction()) {
-            try {
-                await session.abortTransaction();
-            } catch (rollbackError) {
-                console.error(
-                    "Order transaction rollback failed:",
-                    rollbackError.message
-                );
-            }
-        }
-
-        console.error("Create Order Error:", error);
-
-        return res.status(400).json({
-            success: false,
-            message: error.message || "Failed to create order"
-        });
-
-    } finally {
-        if (session) {
-            try {
-                await session.endSession();
-            } catch (sessionError) {
-                console.error(
-                    "MongoDB session cleanup failed:",
-                    sessionError.message
-                );
-            }
-        }
+      subTotal += totalPrice;
+      totalGst += (Number(priceDetails.gstAmount) || 0) * quantity;
     }
+
+    // 9. FINAL TOTAL
+    const finalTotal = subTotal - totalDiscount + Number(shippingCharge || 0);
+
+    if (!Number.isFinite(finalTotal) || finalTotal < 0) {
+      throw new Error("Invalid order total");
+    }
+
+    // 10. PAYMENT AMOUNT VALIDATION
+    if (orderSource === "ONLINE") {
+      if (
+        Math.round(Number(paymentAttempt.amount) * 100) !==
+        Math.round(finalTotal * 100)
+      ) {
+        throw new Error("Payment amount mismatch");
+      }
+    }
+
+    // 11. PAYMENT STATUS
+    let paymentStatus = "Pending";
+
+    if (
+      ["CASH", "UPI", "CARD", "ONLINE", "NETBANKING"].includes(paymentMethod)
+    ) {
+      paymentStatus = "Paid";
+    }
+
+    if (paymentMethod === "COD") {
+      paymentStatus = "Pending";
+    }
+
+    const orderStatus = "Confirmed";
+
+    // 12. CUSTOMER DETAILS
+    let finalCustomerDetails = customerDetails || {};
+
+    if (user) {
+      finalCustomerDetails = {
+        name: customerDetails?.name || user.name || "",
+        phone: customerDetails?.phone || user.phone || "",
+        email: customerDetails?.email || user.email || "",
+      };
+    }
+
+    // 13. CREATE ORDER
+    const order = new Order({
+      orderNumber,
+      invoiceNumber,
+      orderSource,
+      branch: branch || null,
+      subBranch: subBranch || null,
+      createdBy: createdBy || null,
+      user: user?._id || null,
+      customerDetails: finalCustomerDetails,
+      items: orderItems,
+      address: address?._id || null,
+      addressSnapshot,
+      paymentMethod,
+      paymentStatus,
+      subTotal,
+      discountAmount: totalDiscount,
+      couponCode,
+      shippingCharge: Number(shippingCharge) || 0,
+      gstAmount: totalGst,
+      totalAmount: finalTotal,
+      orderStatus,
+      billingStatus: "Completed",
+      statusHistory: [
+        {
+          status: orderStatus,
+          updatedBy: createdBy || null,
+          remarks: "Order created",
+          updatedAt: new Date(),
+        },
+      ],
+      invoiceDate: new Date(),
+      stockUpdated: true,
+      razorpayOrderId: razorpayOrderId || null,
+      razorpayPaymentId: razorpayPaymentId || null,
+      paymentHistory: razorpayPaymentId
+        ? [
+            {
+              method: "ONLINE",
+              amount: finalTotal,
+              transactionId: razorpayPaymentId,
+              paymentGateway: "Razorpay",
+              paidAt: new Date(),
+            },
+          ]
+        : [],
+    });
+
+    await order.save({ session });
+
+    // 14. MARK RESERVATION COMMITTED
+    if (orderSource === "ONLINE") {
+      const allItemsReserved = paymentAttempt.items.every(
+        (attemptItem) =>
+          attemptItem.stockReservationStatus === "RESERVED" &&
+          Array.isArray(attemptItem.stockAllocations) &&
+          attemptItem.stockAllocations.length > 0,
+      );
+
+      if (!allItemsReserved) {
+        throw new Error("Some payment items have missing stock reservations");
+      }
+
+      const reservationResult = await PaymentAttempt.updateOne(
+        {
+          _id: paymentAttempt._id,
+          status: "PAID",
+          items: {
+            $not: {
+              $elemMatch: {
+                stockReservationStatus: { $ne: "RESERVED" },
+              },
+            },
+          },
+        },
+        {
+          $set: {
+            "items.$[].stockReservationStatus": "COMMITTED",
+          },
+        },
+        { session },
+      );
+
+      if (reservationResult.modifiedCount !== 1) {
+        throw new Error("Unable to commit stock reservation");
+      }
+
+      const attemptResult = await PaymentAttempt.updateOne(
+        {
+          _id: paymentAttempt._id,
+          status: "PAID",
+        },
+        {
+          $set: {
+            status: "ORDER_CREATED",
+            order: order._id,
+            razorpayPaymentId,
+          },
+        },
+        { session },
+      );
+
+      if (attemptResult.modifiedCount !== 1) {
+        throw new Error("Unable to update payment attempt status");
+      }
+    }
+
+    // 15. COMMIT
+    await session.commitTransaction();
+    order.$session(null);
+
+    // 16. INVOICE AND WHATSAPP
+    try {
+      const invoiceBuffer = await generateOrderInvoice(order);
+
+      const uploadedInvoice = await uploadInvoicePdf(
+        invoiceBuffer,
+        order.invoiceNumber,
+      );
+
+      order.invoicePdfUrl = uploadedInvoice.url;
+      order.invoiceGeneratedAt = new Date();
+      order.whatsappInvoiceStatus = "PENDING";
+      order.whatsappInvoiceError = null;
+
+      await order.save();
+
+      const customerPhone =
+        order.customerDetails?.phone || order.addressSnapshot?.phone;
+
+      if (!customerPhone) {
+        throw new Error("Customer WhatsApp number not found");
+      }
+
+      const whatsappResult = await sendOrderWhatsApp({
+        phone: customerPhone,
+        customerName: order.customerDetails?.name || "Customer",
+        orderId: order.orderNumber,
+        orderDate: formatDate(order.createdAt),
+        orderAmount: order.totalAmount.toFixed(2),
+        paymentStatus: order.paymentStatus,
+        invoiceUrl: uploadedInvoice.url,
+      });
+
+      order.whatsappInvoiceStatus = "ACCEPTED";
+      order.whatsappMessageId = whatsappResult.messageId;
+      order.whatsappInvoiceError = null;
+
+      await order.save();
+    } catch (invoiceError) {
+      console.error(
+        "Invoice / WhatsApp Processing Error:",
+        invoiceError.message,
+      );
+
+      order.whatsappInvoiceStatus = "FAILED";
+      order.whatsappInvoiceError = invoiceError.message;
+
+      try {
+        await order.save();
+      } catch (saveError) {
+        console.error(saveError.message);
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Order created successfully",
+      data: order,
+    });
+  } catch (error) {
+    if (session?.inTransaction()) {
+      try {
+        await session.abortTransaction();
+      } catch (rollbackError) {
+        console.error(rollbackError.message);
+      }
+    }
+
+    console.error("Create Order Error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to create order",
+    });
+  } finally {
+    if (session) {
+      try {
+        await session.endSession();
+      } catch (sessionError) {
+        console.error(sessionError.message);
+      }
+    }
+  }
 };
 
 // exports.verifyRazorpayPayment = async (req, res) => {
@@ -1668,7 +1749,6 @@ exports.createOrder = async (req, res) => {
 //     }
 // };
 
-
 // ======================================================
 // CREATE ORDER
 // ======================================================
@@ -1732,16 +1812,13 @@ exports.createOrder = async (req, res) => {
 //             throw new Error("Invalid order source");
 //         }
 
-
 //         if (!paymentMethod) {
 //             throw new Error("Payment method is required");
 //         }
 
-
 //         if (!items) {
 //             throw new Error("Order items are required");
 //         }
-
 
 //         // ==================================================
 //         // 2. PARSE ITEMS
@@ -1757,7 +1834,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         if (
 //             !Array.isArray(parsedItems) ||
 //             parsedItems.length === 0
@@ -1767,14 +1843,12 @@ exports.createOrder = async (req, res) => {
 //             );
 //         }
 
-
 //         // ==================================================
 //         // 3. CUSTOMER VALIDATION
 //         // ==================================================
 
 //         let user = null;
 //         let address = null;
-
 
 //         if (orderSource === "ONLINE") {
 
@@ -1790,14 +1864,12 @@ exports.createOrder = async (req, res) => {
 //                 );
 //             }
 
-
 //             user = await User.findById(userId)
 //                 .session(session);
 
 //             if (!user) {
 //                 throw new Error("User not found");
 //             }
-
 
 //             address = await Address.findById(addressId)
 //                 .session(session);
@@ -1807,7 +1879,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         // ==================================================
 //         // 4. BRANCH / SUB-BRANCH VALIDATION
 //         // ==================================================
@@ -1815,7 +1886,6 @@ exports.createOrder = async (req, res) => {
 //         let branchAdmin = null;
 //         let subBranchAdmin = null;
 //         let createdByAdmin = null;
-
 
 //         if (orderSource === "BRANCH") {
 
@@ -1835,7 +1905,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         if (orderSource === "SUB_BRANCH") {
 
 //             if (!subBranch) {
@@ -1854,7 +1923,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         if (createdBy) {
 
 //             createdByAdmin = await Admin.findById(createdBy)
@@ -1867,7 +1935,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         // ==================================================
 //         // 5. GENERATE ORDER NUMBER
 //         // ==================================================
@@ -1877,10 +1944,8 @@ exports.createOrder = async (req, res) => {
 //         const orderNumber =
 //             `ORD-${timestamp}`;
 
-
 //         const invoiceNumber =
 //             `INV-${timestamp}`;
-
 
 //         // ==================================================
 //         // 6. ADDRESS SNAPSHOT
@@ -1922,18 +1987,15 @@ exports.createOrder = async (req, res) => {
 //             };
 //         }
 
-
 //         // ==================================================
 //         // 7. PREPARE ORDER ITEMS
 //         // ==================================================
 
 //         const orderItems = [];
 
-
 //         let subTotal = 0;
 //         let totalDiscount = Number(discountAmount) || 0;
 //         let totalGst = Number(gstAmount) || 0;
-
 
 //         // ==================================================
 //         // 8. PROCESS EVERY ITEM
@@ -1953,17 +2015,14 @@ exports.createOrder = async (req, res) => {
 //                 );
 //             }
 
-
 //             const quantity =
 //                 Number(item.quantity) || 1;
-
 
 //             if (quantity <= 0) {
 //                 throw new Error(
 //                     "Quantity must be greater than zero"
 //                 );
 //             }
-
 
 //             // ==============================================
 //             // LOAD PRODUCT
@@ -1973,13 +2032,11 @@ exports.createOrder = async (req, res) => {
 //                 await Product.findById(item.product)
 //                     .session(session);
 
-
 //             if (!product) {
 //                 throw new Error(
 //                     `Product not found: ${item.product}`
 //                 );
 //             }
-
 
 //             // ==============================================
 //             // FIND EMBEDDED VARIANT
@@ -1992,13 +2049,11 @@ exports.createOrder = async (req, res) => {
 //                         item.variant.toString()
 //                 );
 
-
 //             if (!variant) {
 //                 throw new Error(
 //                     `Variant not found for product ${product.name}`
 //                 );
 //             }
-
 
 //             // ==============================================
 //             // PRODUCT STOCK CHECK
@@ -2013,7 +2068,6 @@ exports.createOrder = async (req, res) => {
 //                 );
 //             }
 
-
 //             // ==============================================
 //             // CALCULATE PRICE
 //             // ==============================================
@@ -2021,23 +2075,19 @@ exports.createOrder = async (req, res) => {
 //             const priceDetails =
 //                 await calculateVariantPrice(variant);
 
-
 //             if (!priceDetails) {
 //                 throw new Error(
 //                     `Unable to calculate price for ${product.name}`
 //                 );
 //             }
 
-
 //             const unitPrice =
 //                 Number(
 //                     priceDetails.finalPrice
 //                 ) || 0;
 
-
 //             const totalPrice =
 //                 unitPrice * quantity;
-
 
 //             // ==============================================
 //             // STONE WEIGHT
@@ -2053,7 +2103,6 @@ exports.createOrder = async (req, res) => {
 //                         ),
 //                     0
 //                 ) || 0;
-
 
 //             // ==============================================
 //             // DIAMOND WEIGHT
@@ -2076,7 +2125,6 @@ exports.createOrder = async (req, res) => {
 //                             ),
 //                         0
 //                     ) || 0;
-
 
 //             // ==============================================
 //             // PRODUCT SNAPSHOT
@@ -2110,7 +2158,6 @@ exports.createOrder = async (req, res) => {
 //                     product.brand || ""
 //             };
 
-
 //             // ==============================================
 //             // STONES SNAPSHOT
 //             // ==============================================
@@ -2142,7 +2189,6 @@ exports.createOrder = async (req, res) => {
 //                         ) || 0
 
 //                 })) || [];
-
 
 //             // ==============================================
 //             // VARIANT SNAPSHOT
@@ -2208,7 +2254,6 @@ exports.createOrder = async (req, res) => {
 //                     stonesSnapshot
 //             };
 
-
 //             // ==============================================
 //             // PRICING SNAPSHOT
 //             // ==============================================
@@ -2264,7 +2309,6 @@ exports.createOrder = async (req, res) => {
 //                     unitPrice
 //             };
 
-
 //             // ==============================================
 //             // SOURCE STOCK ALLOCATION
 //             // ==============================================
@@ -2278,9 +2322,7 @@ exports.createOrder = async (req, res) => {
 //             let remainingQuantity =
 //                 quantity;
 
-
 //             const stockAllocations = [];
-
 
 //             // ==============================================
 //             // SUPPLIER STOCK
@@ -2306,7 +2348,6 @@ exports.createOrder = async (req, res) => {
 //                     })
 //                     .session(session);
 
-
 //             for (
 //                 const supplierItem
 //                 of supplierItems
@@ -2316,17 +2357,14 @@ exports.createOrder = async (req, res) => {
 //                     break;
 //                 }
 
-
 //                 const available =
 //                     Number(
 //                         supplierItem.availableQuantity
 //                     ) || 0;
 
-
 //                 if (available <= 0) {
 //                     continue;
 //                 }
-
 
 //                 const allocateQuantity =
 //                     Math.min(
@@ -2334,16 +2372,13 @@ exports.createOrder = async (req, res) => {
 //                         available
 //                     );
 
-
 //                 supplierItem.availableQuantity =
 //                     available -
 //                     allocateQuantity;
 
-
 //                 await supplierItem.save({
 //                     session
 //                 });
-
 
 //                 stockAllocations.push({
 
@@ -2360,11 +2395,9 @@ exports.createOrder = async (req, res) => {
 //                         allocateQuantity
 //                 });
 
-
 //                 remainingQuantity -=
 //                     allocateQuantity;
 //             }
-
 
 //             // ==============================================
 //             // MAKER STOCK
@@ -2393,7 +2426,6 @@ exports.createOrder = async (req, res) => {
 //                         })
 //                         .session(session);
 
-
 //                 for (
 //                     const makerItem
 //                     of makerItems
@@ -2405,17 +2437,14 @@ exports.createOrder = async (req, res) => {
 //                         break;
 //                     }
 
-
 //                     const available =
 //                         Number(
 //                             makerItem.availableQuantity
 //                         ) || 0;
 
-
 //                     if (available <= 0) {
 //                         continue;
 //                     }
-
 
 //                     const allocateQuantity =
 //                         Math.min(
@@ -2423,16 +2452,13 @@ exports.createOrder = async (req, res) => {
 //                             available
 //                         );
 
-
 //                     makerItem.availableQuantity =
 //                         available -
 //                         allocateQuantity;
 
-
 //                     await makerItem.save({
 //                         session
 //                     });
-
 
 //                     stockAllocations.push({
 
@@ -2449,12 +2475,10 @@ exports.createOrder = async (req, res) => {
 //                             allocateQuantity
 //                     });
 
-
 //                     remainingQuantity -=
 //                         allocateQuantity;
 //                 }
 //             }
-
 
 //             // ==============================================
 //             // FINAL SOURCE STOCK VALIDATION
@@ -2467,7 +2491,6 @@ exports.createOrder = async (req, res) => {
 //                 );
 //             }
 
-
 //             // ==============================================
 //             // DECREASE PRODUCT AGGREGATE STOCK
 //             // ==============================================
@@ -2476,7 +2499,6 @@ exports.createOrder = async (req, res) => {
 //                 Number(variant.stock) -
 //                 quantity;
 
-
 //             if (variant.stock < 0) {
 
 //                 throw new Error(
@@ -2484,11 +2506,9 @@ exports.createOrder = async (req, res) => {
 //                 );
 //             }
 
-
 //             await product.save({
 //                 session
 //             });
-
 
 //             // ==============================================
 //             // CREATE ORDER ITEM
@@ -2517,7 +2537,6 @@ exports.createOrder = async (req, res) => {
 //                 totalPrice
 //             });
 
-
 //             // ==============================================
 //             // TOTALS
 //             // ==============================================
@@ -2531,7 +2550,6 @@ exports.createOrder = async (req, res) => {
 //                 quantity;
 //         }
 
-
 //         // ==================================================
 //         // 9. CALCULATE FINAL TOTAL
 //         // ==================================================
@@ -2541,14 +2559,12 @@ exports.createOrder = async (req, res) => {
 //             totalDiscount +
 //             Number(shippingCharge || 0);
 
-
 //         if (finalTotal < 0) {
 
 //             throw new Error(
 //                 "Invalid order total"
 //             );
 //         }
-
 
 //         // ==================================================
 //         // 10. PAYMENT STATUS
@@ -2572,7 +2588,6 @@ exports.createOrder = async (req, res) => {
 //             paymentStatus = "Pending";
 //         }
 
-
 //         // ==================================================
 //         // 11. ORDER STATUS
 //         // ==================================================
@@ -2580,14 +2595,12 @@ exports.createOrder = async (req, res) => {
 //         const orderStatus =
 //             "Confirmed";
 
-
 //         // ==================================================
 //         // 12. CUSTOMER DETAILS
 //         // ==================================================
 
 //         let finalCustomerDetails =
 //             customerDetails || {};
-
 
 //         if (user) {
 
@@ -2609,7 +2622,6 @@ exports.createOrder = async (req, res) => {
 //                     ""
 //             };
 //         }
-
 
 //         // ==================================================
 //         // 13. CREATE ORDER
@@ -2706,11 +2718,9 @@ exports.createOrder = async (req, res) => {
 
 //             });
 
-
 //         await order.save({
 //             session
 //         });
-
 
 //         // ==================================================
 //         // 14. COMMIT TRANSACTION
@@ -2719,7 +2729,6 @@ exports.createOrder = async (req, res) => {
 //         await session.commitTransaction();
 
 //         session.endSession();
-
 
 //         // ==================================================
 //         // 15. SEND INVOICE EMAIL
@@ -2748,7 +2757,6 @@ exports.createOrder = async (req, res) => {
 //             }
 //         }
 
-
 //         // ==================================================
 //         // 16. RESPONSE
 //         // ==================================================
@@ -2765,7 +2773,6 @@ exports.createOrder = async (req, res) => {
 
 //         });
 
-
 //     } catch (error) {
 
 //         // ==================================================
@@ -2776,12 +2783,10 @@ exports.createOrder = async (req, res) => {
 
 //         session.endSession();
 
-
 //         console.error(
 //             "Create Order Error:",
 //             error
 //         );
-
 
 //         return res.status(400).json({
 
@@ -2795,1326 +2800,1833 @@ exports.createOrder = async (req, res) => {
 //     }
 // };
 
-
-
-
-
 exports.getAllOrders = async (req, res) => {
-    try {
-
-        // ==================================================
-        // PAGINATION
-        // ==================================================
-
-        let page = parseInt(req.query.page) || 1;
-        let limit = parseInt(req.query.limit) || 10;
-
-        if (page < 1) page = 1;
-        if (limit < 1) limit = 10;
-
-        const skip = (page - 1) * limit;
-
-
-        // ==================================================
-        // SEARCH
-        // ==================================================
-
-        const search = req.query.search?.trim() || "";
-
-        const query = {};
-
-        if (search) {
-
-            query.$or = [
-
-                {
-                    orderNumber: {
-                        $regex: search,
-                        $options: "i"
-                    }
-                },
-
-                {
-                    invoiceNumber: {
-                        $regex: search,
-                        $options: "i"
-                    }
-                },
-
-                {
-                    "customerDetails.name": {
-                        $regex: search,
-                        $options: "i"
-                    }
-                },
-
-                {
-                    "customerDetails.phone": {
-                        $regex: search,
-                        $options: "i"
-                    }
-                }
-            ];
-        }
-
-
-        // ==================================================
-        // OPTIONAL FILTERS
-        // ==================================================
-
-        if (req.query.orderStatus) {
-
-            query.orderStatus =
-                req.query.orderStatus;
-        }
-
-
-        if (req.query.paymentStatus) {
-
-            query.paymentStatus =
-                req.query.paymentStatus;
-        }
-
-
-        if (req.query.orderSource) {
-
-            query.orderSource =
-                req.query.orderSource;
-        }
-
-
-        // ==================================================
-        // TOTAL COUNT
-        // ==================================================
-
-        const totalOrders =
-            await Order.countDocuments(query);
-
-
-        // ==================================================
-        // GET ORDERS
-        // ==================================================
-
-        const orders =
-            await Order.find(query)
-
-                // ------------------------------------------
-                // CUSTOMER
-                // ------------------------------------------
-
-                .populate({
-                    path: "user",
-                    select:
-                        "name email phone"
-                })
-                .populate({
-                    path: "items.product",
-                    select: "name slug images"
-                })
-                // ------------------------------------------
-                // BRANCH
-                // ------------------------------------------
-
-                .populate({
-                    path: "branch",
-                    select:
-                        "name email phone role"
-                })
-
-                // ------------------------------------------
-                // SUB BRANCH
-                // ------------------------------------------
-
-                .populate({
-                    path: "subBranch",
-                    select:
-                        "name email phone role"
-                })
-
-                // ------------------------------------------
-                // CREATED BY
-                // ------------------------------------------
-
-                .populate({
-                    path: "createdBy",
-                    select:
-                        "name email phone role"
-                })
-
-                // ------------------------------------------
-                // ADDRESS
-                // ------------------------------------------
-
-                .populate({
-                    path: "address"
-                })
-
-                // ------------------------------------------
-                // SUPPLIER PURCHASE ITEM
-                // ------------------------------------------
-
-                .populate({
-                    path:
-                        "items.stockAllocations.supplierPurchaseItem",
-
-                    select:
-                        "purchase supplierProductCode batchNumber quantity availableQuantity purchasePrice discount tax totalAmount notes",
-
-                    populate: {
-
-                        path: "purchase",
-
-                        select:
-                            "supplier invoiceNumber invoiceDate purchaseDate status paymentStatus",
-
-                        populate: {
-
-                            path: "supplier",
-
-                            select:
-                                "name companyName phone email gstNumber address"
-
-                        }
-                    }
-                })
-
-                // ------------------------------------------
-                // MAKER PRODUCTION ITEM
-                // ------------------------------------------
-
-                .populate({
-                    path:
-                        "items.stockAllocations.makerProductionItem",
-
-                    select:
-                        "production quantityGiven quantityReceived availableQuantity notes",
-
-                    populate: {
-
-                        path: "production",
-
-                        select:
-                            "maker productionNumber issueDate expectedDate receivedDate status notes",
-
-                        populate: {
-
-                            path: "maker",
-
-                            select:
-                                "name phone email address specialization notes"
-
-                        }
-                    }
-                })
-
-                // ------------------------------------------
-                // SORT
-                // ------------------------------------------
-
-                .sort({
-                    createdAt: -1
-                })
-
-                // ------------------------------------------
-                // PAGINATION
-                // ------------------------------------------
-
-                .skip(skip)
-                .limit(limit);
-
-
-        // ==================================================
-        // FORMAT SOURCE INFORMATION
-        // ==================================================
-        //
-        // Frontend ki direct ga:
-        //
-        // SUPPLIER
-        // supplierDetails
-        //
-        // MAKER
-        // makerDetails
-        //
-        // ani easy structure provide chestham.
-
-        const formattedOrders =
-            orders.map(order => {
-
-                const orderObj =
-                    order.toObject();
-
-
-                orderObj.items =
-                    orderObj.items.map(item => {
-
-                        item.stockAllocations =
-                            item.stockAllocations?.map(
-                                allocation => {
-
-                                    // ==================================
-                                    // SUPPLIER SOURCE
-                                    // ==================================
-
-                                    if (
-                                        allocation.sourceType ===
-                                        "SUPPLIER"
-                                    ) {
-
-                                        const supplierItem =
-                                            allocation
-                                                .supplierPurchaseItem;
-
-
-                                        const purchase =
-                                            supplierItem?.purchase;
-
-
-                                        const supplier =
-                                            purchase?.supplier;
-
-
-                                        return {
-
-                                            ...allocation,
-
-                                            sourceDetails: {
-
-                                                sourceType:
-                                                    "SUPPLIER",
-
-                                                supplierPurchaseItemId:
-                                                    supplierItem?._id ||
-                                                    null,
-
-                                                supplier: supplier
-                                                    ? {
-                                                        _id:
-                                                            supplier._id,
-
-                                                        name:
-                                                            supplier.name,
-
-                                                        companyName:
-                                                            supplier.companyName,
-
-                                                        phone:
-                                                            supplier.phone,
-
-                                                        email:
-                                                            supplier.email,
-
-                                                        gstNumber:
-                                                            supplier.gstNumber,
-
-                                                        address:
-                                                            supplier.address
-                                                    }
-                                                    : null,
-
-                                                purchase: purchase
-                                                    ? {
-                                                        _id:
-                                                            purchase._id,
-
-                                                        invoiceNumber:
-                                                            purchase.invoiceNumber,
-
-                                                        invoiceDate:
-                                                            purchase.invoiceDate,
-
-                                                        purchaseDate:
-                                                            purchase.purchaseDate,
-
-                                                        status:
-                                                            purchase.status,
-
-                                                        paymentStatus:
-                                                            purchase.paymentStatus
-                                                    }
-                                                    : null,
-
-                                                supplierProductCode:
-                                                    supplierItem
-                                                        ?.supplierProductCode ||
-                                                    "",
-
-                                                batchNumber:
-                                                    supplierItem
-                                                        ?.batchNumber ||
-                                                    "",
-
-                                                allocatedQuantity:
-                                                    allocation.quantity
-                                            }
-                                        };
-                                    }
-
-
-                                    // ==================================
-                                    // MAKER SOURCE
-                                    // ==================================
-
-                                    if (
-                                        allocation.sourceType ===
-                                        "MAKER"
-                                    ) {
-
-                                        const makerItem =
-                                            allocation
-                                                .makerProductionItem;
-
-
-                                        const production =
-                                            makerItem?.production;
-
-
-                                        const maker =
-                                            production?.maker;
-
-
-                                        return {
-
-                                            ...allocation,
-
-                                            sourceDetails: {
-
-                                                sourceType:
-                                                    "MAKER",
-
-                                                makerProductionItemId:
-                                                    makerItem?._id ||
-                                                    null,
-
-                                                maker: maker
-                                                    ? {
-                                                        _id:
-                                                            maker._id,
-
-                                                        name:
-                                                            maker.name,
-
-                                                        phone:
-                                                            maker.phone,
-
-                                                        email:
-                                                            maker.email,
-
-                                                        specialization:
-                                                            maker.specialization,
-
-                                                        address:
-                                                            maker.address
-                                                    }
-                                                    : null,
-
-                                                production:
-                                                    production
-                                                        ? {
-                                                            _id:
-                                                                production._id,
-
-                                                            productionNumber:
-                                                                production.productionNumber,
-
-                                                            issueDate:
-                                                                production.issueDate,
-
-                                                            expectedDate:
-                                                                production.expectedDate,
-
-                                                            receivedDate:
-                                                                production.receivedDate,
-
-                                                            status:
-                                                                production.status
-                                                        }
-                                                        : null,
-
-                                                allocatedQuantity:
-                                                    allocation.quantity
-                                            }
-                                        };
-                                    }
-
-
-                                    return allocation;
-
-                                }
-                            );
-
-                        return item;
-
-                    });
-
-
-                return orderObj;
-            });
-
-
-        // ==================================================
-        // RESPONSE
-        // ==================================================
-
-        return res.status(200).json({
-
-            success: true,
-
-            message:
-                "Orders fetched successfully",
-
-            data:
-                formattedOrders,
-
-            pagination: {
-
-                currentPage:
-                    page,
-
-                totalPages:
-                    Math.ceil(
-                        totalOrders / limit
-                    ),
-
-                totalOrders,
-
-                limit,
-
-                hasNextPage:
-                    page <
-                    Math.ceil(
-                        totalOrders / limit
-                    ),
-
-                hasPreviousPage:
-                    page > 1
-            }
-
-        });
-
-    } catch (error) {
-
-        console.error(
-            "Get All Orders Error:",
-            error
-        );
-
-        return res.status(500).json({
-
-            success: false,
-
-            message:
-                error.message ||
-                "Failed to fetch orders"
-
-        });
+  try {
+    // ==================================================
+    // PAGINATION
+    // ==================================================
+
+    let page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 10;
+
+    if (page < 1) page = 1;
+    if (limit < 1) limit = 10;
+
+    const skip = (page - 1) * limit;
+
+    // ==================================================
+    // SEARCH
+    // ==================================================
+
+    const search = req.query.search?.trim() || "";
+
+    const query = {};
+
+    if (search) {
+      query.$or = [
+        {
+          orderNumber: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+
+        {
+          invoiceNumber: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+
+        {
+          "customerDetails.name": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+
+        {
+          "customerDetails.phone": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+      ];
     }
-};
 
+    // ==================================================
+    // OPTIONAL FILTERS
+    // ==================================================
+
+    if (req.query.orderStatus) {
+      query.orderStatus = req.query.orderStatus;
+    }
+
+    if (req.query.paymentStatus) {
+      query.paymentStatus = req.query.paymentStatus;
+    }
+
+    if (req.query.orderSource) {
+      query.orderSource = req.query.orderSource;
+    }
+
+    // ==================================================
+    // TOTAL COUNT
+    // ==================================================
+
+    const totalOrders = await Order.countDocuments(query);
+
+    // ==================================================
+    // GET ORDERS
+    // ==================================================
+
+    const orders = await Order.find(query)
+
+      // ------------------------------------------
+      // CUSTOMER
+      // ------------------------------------------
+
+      .populate({
+        path: "user",
+        select: "name email phone",
+      })
+      .populate({
+        path: "items.product",
+        select: "name slug images",
+      })
+      // ------------------------------------------
+      // BRANCH
+      // ------------------------------------------
+
+      .populate({
+        path: "branch",
+        select: "name email phone role",
+      })
+
+      // ------------------------------------------
+      // SUB BRANCH
+      // ------------------------------------------
+
+      .populate({
+        path: "subBranch",
+        select: "name email phone role",
+      })
+
+      // ------------------------------------------
+      // CREATED BY
+      // ------------------------------------------
+
+      .populate({
+        path: "createdBy",
+        select: "name email phone role",
+      })
+
+      // ------------------------------------------
+      // ADDRESS
+      // ------------------------------------------
+
+      .populate({
+        path: "address",
+      })
+
+      // ------------------------------------------
+      // SUPPLIER PURCHASE ITEM
+      // ------------------------------------------
+
+      .populate({
+        path: "items.stockAllocations.supplierPurchaseItem",
+
+        select:
+          "purchase supplierProductCode batchNumber quantity availableQuantity purchasePrice discount tax totalAmount notes",
+
+        populate: {
+          path: "purchase",
+
+          select:
+            "supplier invoiceNumber invoiceDate purchaseDate status paymentStatus",
+
+          populate: {
+            path: "supplier",
+
+            select: "name companyName phone email gstNumber address",
+          },
+        },
+      })
+
+      // ------------------------------------------
+      // MAKER PRODUCTION ITEM
+      // ------------------------------------------
+
+      .populate({
+        path: "items.stockAllocations.makerProductionItem",
+
+        select:
+          "production quantityGiven quantityReceived availableQuantity notes",
+
+        populate: {
+          path: "production",
+
+          select:
+            "maker productionNumber issueDate expectedDate receivedDate status notes",
+
+          populate: {
+            path: "maker",
+
+            select: "name phone email address specialization notes",
+          },
+        },
+      })
+
+      // ------------------------------------------
+      // SORT
+      // ------------------------------------------
+
+      .sort({
+        createdAt: -1,
+      })
+
+      // ------------------------------------------
+      // PAGINATION
+      // ------------------------------------------
+
+      .skip(skip)
+      .limit(limit);
+
+    // ==================================================
+    // FORMAT SOURCE INFORMATION
+    // ==================================================
+    //
+    // Frontend ki direct ga:
+    //
+    // SUPPLIER
+    // supplierDetails
+    //
+    // MAKER
+    // makerDetails
+    //
+    // ani easy structure provide chestham.
+
+    const formattedOrders = orders.map((order) => {
+      const orderObj = order.toObject();
+
+      orderObj.items = orderObj.items.map((item) => {
+        item.stockAllocations = item.stockAllocations?.map((allocation) => {
+          // ==================================
+          // SUPPLIER SOURCE
+          // ==================================
+
+          if (allocation.sourceType === "SUPPLIER") {
+            const supplierItem = allocation.supplierPurchaseItem;
+
+            const purchase = supplierItem?.purchase;
+
+            const supplier = purchase?.supplier;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "SUPPLIER",
+
+                supplierPurchaseItemId: supplierItem?._id || null,
+
+                supplier: supplier
+                  ? {
+                      _id: supplier._id,
+
+                      name: supplier.name,
+
+                      companyName: supplier.companyName,
+
+                      phone: supplier.phone,
+
+                      email: supplier.email,
+
+                      gstNumber: supplier.gstNumber,
+
+                      address: supplier.address,
+                    }
+                  : null,
+
+                purchase: purchase
+                  ? {
+                      _id: purchase._id,
+
+                      invoiceNumber: purchase.invoiceNumber,
+
+                      invoiceDate: purchase.invoiceDate,
+
+                      purchaseDate: purchase.purchaseDate,
+
+                      status: purchase.status,
+
+                      paymentStatus: purchase.paymentStatus,
+                    }
+                  : null,
+
+                supplierProductCode: supplierItem?.supplierProductCode || "",
+
+                batchNumber: supplierItem?.batchNumber || "",
+
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          // ==================================
+          // MAKER SOURCE
+          // ==================================
+
+          if (allocation.sourceType === "MAKER") {
+            const makerItem = allocation.makerProductionItem;
+
+            const production = makerItem?.production;
+
+            const maker = production?.maker;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "MAKER",
+
+                makerProductionItemId: makerItem?._id || null,
+
+                maker: maker
+                  ? {
+                      _id: maker._id,
+
+                      name: maker.name,
+
+                      phone: maker.phone,
+
+                      email: maker.email,
+
+                      specialization: maker.specialization,
+
+                      address: maker.address,
+                    }
+                  : null,
+
+                production: production
+                  ? {
+                      _id: production._id,
+
+                      productionNumber: production.productionNumber,
+
+                      issueDate: production.issueDate,
+
+                      expectedDate: production.expectedDate,
+
+                      receivedDate: production.receivedDate,
+
+                      status: production.status,
+                    }
+                  : null,
+
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          return allocation;
+        });
+
+        return item;
+      });
+
+      return orderObj;
+    });
+
+    // ==================================================
+    // RESPONSE
+    // ==================================================
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Orders fetched successfully",
+
+      data: formattedOrders,
+
+      pagination: {
+        currentPage: page,
+
+        totalPages: Math.ceil(totalOrders / limit),
+
+        totalOrders,
+
+        limit,
+
+        hasNextPage: page < Math.ceil(totalOrders / limit),
+
+        hasPreviousPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error("Get All Orders Error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to fetch orders",
+    });
+  }
+};
 
 // ======================================================
 // GET ORDER BY ID
 // ======================================================
 
 exports.getOrderById = async (req, res) => {
-
-    try {
-
-        const { id } = req.params;
-
-
-        // ==================================================
-        // 1. VALIDATE ORDER ID
-        // ==================================================
-
-        if (!id) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message: "Order ID is required"
-
-            });
-        }
-
-
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message: "Invalid order ID"
-
-            });
-        }
-
-
-        // ==================================================
-        // 2. GET ORDER
-        // ==================================================
-
-        const order = await Order.findById(id)
-
-            // ------------------------------------------
-            // CUSTOMER
-            // ------------------------------------------
-
-            .populate({
-                path: "user",
-                select: "name email phone"
-            })
-
-            // ------------------------------------------
-            // BRANCH
-            // ------------------------------------------
-
-            .populate({
-                path: "branch",
-                select: "name email phone role"
-            })
-
-            // ------------------------------------------
-            // SUB BRANCH
-            // ------------------------------------------
-
-            .populate({
-                path: "subBranch",
-                select: "name email phone role"
-            })
-
-            // ------------------------------------------
-            // CREATED BY
-            // ------------------------------------------
-
-            .populate({
-                path: "createdBy",
-                select: "name email phone role"
-            })
-            .populate({
-                path: "items.product",
-                select: "name slug images"
-            })
-            // ------------------------------------------
-            // ADDRESS
-            // ------------------------------------------
-
-            .populate({
-                path: "address"
-            })
-
-            // ==================================================
-            // SUPPLIER STOCK SOURCE
-            // ==================================================
-
-            .populate({
-                path:
-                    "items.stockAllocations.supplierPurchaseItem",
-
-                select:
-                    "purchase supplierProductCode batchNumber quantity availableQuantity purchasePrice discount tax totalAmount notes",
-
-                populate: {
-
-                    path: "purchase",
-
-                    select:
-                        "supplier invoiceNumber invoiceDate purchaseDate status paymentStatus",
-
-                    populate: {
-
-                        path: "supplier",
-
-                        select:
-                            "name companyName phone email gstNumber address"
-
-                    }
-                }
-            })
-
-            // ==================================================
-            // MAKER STOCK SOURCE
-            // ==================================================
-
-            .populate({
-                path:
-                    "items.stockAllocations.makerProductionItem",
-
-                select:
-                    "production quantityGiven quantityReceived availableQuantity notes",
-
-                populate: {
-
-                    path: "production",
-
-                    select:
-                        "maker productionNumber issueDate expectedDate receivedDate status notes",
-
-                    populate: {
-
-                        path: "maker",
-
-                        select:
-                            "name phone email address specialization notes"
-
-                    }
-                }
-            });
-
-
-        // ==================================================
-        // 3. ORDER NOT FOUND
-        // ==================================================
-
-        if (!order) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message: "Order not found"
-
-            });
-        }
-
-
-        // ==================================================
-        // 4. CONVERT TO OBJECT
-        // ==================================================
-
-        const orderObj =
-            order.toObject();
-
-
-        // ==================================================
-        // 5. FORMAT STOCK SOURCE INFORMATION
-        // ==================================================
-
-        orderObj.items =
-            orderObj.items.map(item => {
-
-                item.stockAllocations =
-                    item.stockAllocations?.map(
-                        allocation => {
-
-
-                            // ==================================================
-                            // SUPPLIER
-                            // ==================================================
-
-                            if (
-                                allocation.sourceType ===
-                                "SUPPLIER"
-                            ) {
-
-                                const supplierItem =
-                                    allocation
-                                        .supplierPurchaseItem;
-
-
-                                const purchase =
-                                    supplierItem?.purchase;
-
-
-                                const supplier =
-                                    purchase?.supplier;
-
-
-                                return {
-
-                                    ...allocation,
-
-                                    sourceDetails: {
-
-                                        sourceType:
-                                            "SUPPLIER",
-
-
-                                        supplierPurchaseItemId:
-                                            supplierItem?._id ||
-                                            null,
-
-
-                                        // ----------------------------------
-                                        // SUPPLIER DETAILS
-                                        // ----------------------------------
-
-                                        supplier:
-                                            supplier
-                                                ? {
-
-                                                    _id:
-                                                        supplier._id,
-
-                                                    name:
-                                                        supplier.name,
-
-                                                    companyName:
-                                                        supplier.companyName,
-
-                                                    phone:
-                                                        supplier.phone,
-
-                                                    email:
-                                                        supplier.email,
-
-                                                    gstNumber:
-                                                        supplier.gstNumber,
-
-                                                    address:
-                                                        supplier.address
-
-                                                }
-                                                : null,
-
-
-                                        // ----------------------------------
-                                        // PURCHASE DETAILS
-                                        // ----------------------------------
-
-                                        purchase:
-                                            purchase
-                                                ? {
-
-                                                    _id:
-                                                        purchase._id,
-
-                                                    invoiceNumber:
-                                                        purchase.invoiceNumber,
-
-                                                    invoiceDate:
-                                                        purchase.invoiceDate,
-
-                                                    purchaseDate:
-                                                        purchase.purchaseDate,
-
-                                                    status:
-                                                        purchase.status,
-
-                                                    paymentStatus:
-                                                        purchase.paymentStatus
-
-                                                }
-                                                : null,
-
-
-                                        // ----------------------------------
-                                        // SUPPLIER PRODUCT INFO
-                                        // ----------------------------------
-
-                                        supplierProductCode:
-                                            supplierItem
-                                                ?.supplierProductCode ||
-                                            "",
-
-
-                                        batchNumber:
-                                            supplierItem
-                                                ?.batchNumber ||
-                                            "",
-
-
-                                        // ----------------------------------
-                                        // ORDER ALLOCATED QTY
-                                        // ----------------------------------
-
-                                        allocatedQuantity:
-                                            allocation.quantity
-
-                                    }
-
-                                };
-
-                            }
-
-
-                            // ==================================================
-                            // MAKER
-                            // ==================================================
-
-                            if (
-                                allocation.sourceType ===
-                                "MAKER"
-                            ) {
-
-                                const makerItem =
-                                    allocation
-                                        .makerProductionItem;
-
-
-                                const production =
-                                    makerItem?.production;
-
-
-                                const maker =
-                                    production?.maker;
-
-
-                                return {
-
-                                    ...allocation,
-
-                                    sourceDetails: {
-
-                                        sourceType:
-                                            "MAKER",
-
-
-                                        makerProductionItemId:
-                                            makerItem?._id ||
-                                            null,
-
-
-                                        // ----------------------------------
-                                        // MAKER DETAILS
-                                        // ----------------------------------
-
-                                        maker:
-                                            maker
-                                                ? {
-
-                                                    _id:
-                                                        maker._id,
-
-                                                    name:
-                                                        maker.name,
-
-                                                    phone:
-                                                        maker.phone,
-
-                                                    email:
-                                                        maker.email,
-
-                                                    specialization:
-                                                        maker.specialization,
-
-                                                    address:
-                                                        maker.address
-
-                                                }
-                                                : null,
-
-
-                                        // ----------------------------------
-                                        // PRODUCTION DETAILS
-                                        // ----------------------------------
-
-                                        production:
-                                            production
-                                                ? {
-
-                                                    _id:
-                                                        production._id,
-
-                                                    productionNumber:
-                                                        production.productionNumber,
-
-                                                    issueDate:
-                                                        production.issueDate,
-
-                                                    expectedDate:
-                                                        production.expectedDate,
-
-                                                    receivedDate:
-                                                        production.receivedDate,
-
-                                                    status:
-                                                        production.status,
-
-                                                    notes:
-                                                        production.notes
-
-                                                }
-                                                : null,
-
-
-                                        // ----------------------------------
-                                        // ORDER ALLOCATED QTY
-                                        // ----------------------------------
-
-                                        allocatedQuantity:
-                                            allocation.quantity
-
-                                    }
-
-                                };
-
-                            }
-
-
-                            // ==================================================
-                            // UNKNOWN SOURCE
-                            // ==================================================
-
-                            return allocation;
-
-                        }
-                    ) || [];
-
-
-                return item;
-
-            });
-
-
-        // ==================================================
-        // 6. RESPONSE
-        // ==================================================
-
-        return res.status(200).json({
-
-            success: true,
-
-            message:
-                "Order fetched successfully",
-
-            data:
-                orderObj
-
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "Get Order By ID Error:",
-            error
-        );
-
-
-        return res.status(500).json({
-
-            success: false,
-
-            message:
-                error.message ||
-                "Failed to fetch order"
-
-        });
-
+  try {
+    const { id } = req.params;
+
+    // ==================================================
+    // 1. VALIDATE ORDER ID
+    // ==================================================
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+
+        message: "Order ID is required",
+      });
     }
 
-};
-// get order by user 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
 
+        message: "Invalid order ID",
+      });
+    }
+
+    // ==================================================
+    // 2. GET ORDER
+    // ==================================================
+
+    const order = await Order.findById(id)
+
+      // ------------------------------------------
+      // CUSTOMER
+      // ------------------------------------------
+
+      .populate({
+        path: "user",
+        select: "name email phone",
+      })
+
+      // ------------------------------------------
+      // BRANCH
+      // ------------------------------------------
+
+      .populate({
+        path: "branch",
+        select: "name email phone role",
+      })
+
+      // ------------------------------------------
+      // SUB BRANCH
+      // ------------------------------------------
+
+      .populate({
+        path: "subBranch",
+        select: "name email phone role",
+      })
+
+      // ------------------------------------------
+      // CREATED BY
+      // ------------------------------------------
+
+      .populate({
+        path: "createdBy",
+        select: "name email phone role",
+      })
+      .populate({
+        path: "items.product",
+        select: "name slug images",
+      })
+      // ------------------------------------------
+      // ADDRESS
+      // ------------------------------------------
+
+      .populate({
+        path: "address",
+      })
+
+      // ==================================================
+      // SUPPLIER STOCK SOURCE
+      // ==================================================
+
+      .populate({
+        path: "items.stockAllocations.supplierPurchaseItem",
+
+        select:
+          "purchase supplierProductCode batchNumber quantity availableQuantity purchasePrice discount tax totalAmount notes",
+
+        populate: {
+          path: "purchase",
+
+          select:
+            "supplier invoiceNumber invoiceDate purchaseDate status paymentStatus",
+
+          populate: {
+            path: "supplier",
+
+            select: "name companyName phone email gstNumber address",
+          },
+        },
+      })
+
+      // ==================================================
+      // MAKER STOCK SOURCE
+      // ==================================================
+
+      .populate({
+        path: "items.stockAllocations.makerProductionItem",
+
+        select:
+          "production quantityGiven quantityReceived availableQuantity notes",
+
+        populate: {
+          path: "production",
+
+          select:
+            "maker productionNumber issueDate expectedDate receivedDate status notes",
+
+          populate: {
+            path: "maker",
+
+            select: "name phone email address specialization notes",
+          },
+        },
+      });
+
+    // ==================================================
+    // 3. ORDER NOT FOUND
+    // ==================================================
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+
+        message: "Order not found",
+      });
+    }
+
+    // ==================================================
+    // 4. CONVERT TO OBJECT
+    // ==================================================
+
+    const orderObj = order.toObject();
+
+    // ==================================================
+    // 5. FORMAT STOCK SOURCE INFORMATION
+    // ==================================================
+
+    orderObj.items = orderObj.items.map((item) => {
+      item.stockAllocations =
+        item.stockAllocations?.map((allocation) => {
+          // ==================================================
+          // SUPPLIER
+          // ==================================================
+
+          if (allocation.sourceType === "SUPPLIER") {
+            const supplierItem = allocation.supplierPurchaseItem;
+
+            const purchase = supplierItem?.purchase;
+
+            const supplier = purchase?.supplier;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "SUPPLIER",
+
+                supplierPurchaseItemId: supplierItem?._id || null,
+
+                // ----------------------------------
+                // SUPPLIER DETAILS
+                // ----------------------------------
+
+                supplier: supplier
+                  ? {
+                      _id: supplier._id,
+
+                      name: supplier.name,
+
+                      companyName: supplier.companyName,
+
+                      phone: supplier.phone,
+
+                      email: supplier.email,
+
+                      gstNumber: supplier.gstNumber,
+
+                      address: supplier.address,
+                    }
+                  : null,
+
+                // ----------------------------------
+                // PURCHASE DETAILS
+                // ----------------------------------
+
+                purchase: purchase
+                  ? {
+                      _id: purchase._id,
+
+                      invoiceNumber: purchase.invoiceNumber,
+
+                      invoiceDate: purchase.invoiceDate,
+
+                      purchaseDate: purchase.purchaseDate,
+
+                      status: purchase.status,
+
+                      paymentStatus: purchase.paymentStatus,
+                    }
+                  : null,
+
+                // ----------------------------------
+                // SUPPLIER PRODUCT INFO
+                // ----------------------------------
+
+                supplierProductCode: supplierItem?.supplierProductCode || "",
+
+                batchNumber: supplierItem?.batchNumber || "",
+
+                // ----------------------------------
+                // ORDER ALLOCATED QTY
+                // ----------------------------------
+
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          // ==================================================
+          // MAKER
+          // ==================================================
+
+          if (allocation.sourceType === "MAKER") {
+            const makerItem = allocation.makerProductionItem;
+
+            const production = makerItem?.production;
+
+            const maker = production?.maker;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "MAKER",
+
+                makerProductionItemId: makerItem?._id || null,
+
+                // ----------------------------------
+                // MAKER DETAILS
+                // ----------------------------------
+
+                maker: maker
+                  ? {
+                      _id: maker._id,
+
+                      name: maker.name,
+
+                      phone: maker.phone,
+
+                      email: maker.email,
+
+                      specialization: maker.specialization,
+
+                      address: maker.address,
+                    }
+                  : null,
+
+                // ----------------------------------
+                // PRODUCTION DETAILS
+                // ----------------------------------
+
+                production: production
+                  ? {
+                      _id: production._id,
+
+                      productionNumber: production.productionNumber,
+
+                      issueDate: production.issueDate,
+
+                      expectedDate: production.expectedDate,
+
+                      receivedDate: production.receivedDate,
+
+                      status: production.status,
+
+                      notes: production.notes,
+                    }
+                  : null,
+
+                // ----------------------------------
+                // ORDER ALLOCATED QTY
+                // ----------------------------------
+
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          // ==================================================
+          // UNKNOWN SOURCE
+          // ==================================================
+
+          return allocation;
+        }) || [];
+
+      return item;
+    });
+
+    // ==================================================
+    // 6. RESPONSE
+    // ==================================================
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Order fetched successfully",
+
+      data: orderObj,
+    });
+  } catch (error) {
+    console.error("Get Order By ID Error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to fetch order",
+    });
+  }
+};
+// get order by user
 
 exports.getOrdersByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
 
-    try {
+    const orders = await Order.find({
+      user: userId,
+    })
 
-        const { userId } = req.params;
+      // CUSTOMER DETAILS
+      .populate("user", "name phone email")
 
-        const orders = await Order.find({
+      // PRODUCT DETAILS WITH IMAGES
+      .populate({
+        path: "items.product",
+        select: "name slug images variants._id variants.metalPurity",
+      })
 
-            user: userId
+      // ADDRESS DETAILS
+      .populate("address")
 
-        })
+      // STATUS UPDATED BY
+      .populate("statusHistory.updatedBy", "name role")
 
-            // CUSTOMER DETAILS
-            .populate("user", "name phone email")
+      // LATEST ORDERS FIRST
+      .sort({ createdAt: -1 });
 
-            // PRODUCT DETAILS WITH IMAGES
-            .populate({
-                path: "items.product",
-                select: "name slug images variants._id variants.metalPurity"
-            })
+    if (!orders.length) {
+      return res.status(404).json({
+        success: false,
 
-            // ADDRESS DETAILS
-            .populate("address")
-
-            // STATUS UPDATED BY
-            .populate("statusHistory.updatedBy", "name role")
-
-            // LATEST ORDERS FIRST
-            .sort({ createdAt: -1 });
-
-
-        if (!orders.length) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message: "No orders found"
-
-            });
-
-        }
-
-
-        res.status(200).json({
-
-            success: true,
-
-            count: orders.length,
-
-            data: orders
-
-        });
-
+        message: "No orders found",
+      });
     }
 
-    catch (error) {
+    res.status(200).json({
+      success: true,
 
-        console.error("Get Orders By User Error:", error);
+      count: orders.length,
 
-        res.status(500).json({
+      data: orders,
+    });
+  } catch (error) {
+    console.error("Get Orders By User Error:", error);
 
-            success: false,
+    res.status(500).json({
+      success: false,
 
-            message: error.message
-
-        });
-
-    }
-
+      message: error.message,
+    });
+  }
 };
 
-// gey branch by order 
+// gey branch by order
 exports.getBranchOrders = async (req, res) => {
+  try {
+    const { branchId } = req.params;
 
-    try {
+    const orders = await Order.find({
+      branch: branchId,
+    })
 
-        const { branchId } = req.params;
+      .populate("branch", "name email contactNumber role")
 
-        const orders = await Order.find({
+      .populate("createdBy", "name email role")
 
-            branch: branchId
+      .populate("user", "name phone email")
 
-        })
+      .populate("address")
 
-            .populate("branch", "name email contactNumber role")
+      .populate("statusHistory.updatedBy", "name role")
 
-            .populate("createdBy", "name email role")
+      .sort({ createdAt: -1 });
 
-            .populate("user", "name phone email")
+    if (!orders.length) {
+      return res.status(404).json({
+        success: false,
 
-            .populate("address")
-
-            .populate("statusHistory.updatedBy", "name role")
-
-            .sort({ createdAt: -1 });
-
-        if (!orders.length) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message: "No orders found"
-
-            });
-
-        }
-
-        res.status(200).json({
-
-            success: true,
-
-            count: orders.length,
-
-            data: orders
-
-        });
-
+        message: "No orders found",
+      });
     }
 
-    catch (error) {
+    res.status(200).json({
+      success: true,
 
-        res.status(500).json({
+      count: orders.length,
 
-            success: false,
+      data: orders,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
 
-            message: error.message
-
-        });
-
-    }
-
+      message: error.message,
+    });
+  }
 };
 
 // get sub branch
 
 exports.getSubBranchOrders = async (req, res) => {
+  try {
+    const { subBranchId } = req.params;
 
-    try {
+    const orders = await Order.find({
+      subBranch: subBranchId,
+    })
 
-        const { subBranchId } = req.params;
+      .populate("branch", "name email contactNumber role")
 
-        const orders = await Order.find({
+      .populate("subBranch", "name email contactNumber role")
 
-            subBranch: subBranchId
+      .populate("createdBy", "name email role")
 
-        })
+      .populate("user", "name phone email")
 
-            .populate("branch", "name email contactNumber role")
+      .populate("address")
 
-            .populate("subBranch", "name email contactNumber role")
+      .populate("statusHistory.updatedBy", "name role")
 
-            .populate("createdBy", "name email role")
+      .sort({ createdAt: -1 });
 
-            .populate("user", "name phone email")
+    if (!orders.length) {
+      return res.status(404).json({
+        success: false,
 
-            .populate("address")
-
-            .populate("statusHistory.updatedBy", "name role")
-
-            .sort({ createdAt: -1 });
-
-        if (!orders.length) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message: "No orders found"
-
-            });
-
-        }
-
-        res.status(200).json({
-
-            success: true,
-
-            count: orders.length,
-
-            data: orders
-
-        });
-
+        message: "No orders found",
+      });
     }
 
-    catch (error) {
+    res.status(200).json({
+      success: true,
 
-        res.status(500).json({
+      count: orders.length,
 
-            success: false,
+      data: orders,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
 
-            message: error.message
-
-        });
-
-    }
-
+      message: error.message,
+    });
+  }
 };
 
-// calculate 
+// calculate
 exports.calculatePrice = async (req, res) => {
+  try {
+    const { product, variant, quantity } = req.body;
 
-    try {
-
-        const { product, variant, quantity } = req.body;
-
-        if (!product || !variant || !quantity) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Product, Variant and Quantity are required."
-            });
-
-        }
-
-        const productData = await Product.findById(product);
-
-        if (!productData) {
-
-            return res.status(404).json({
-                success: false,
-                message: "Product not found."
-            });
-
-        }
-
-        const variantData = productData.variants.id(variant);
-
-        if (!variantData) {
-
-            return res.status(404).json({
-                success: false,
-                message: "Variant not found."
-            });
-
-        }
-
-        const price = await calculateVariantPrice(variantData);
-
-        return res.status(200).json({
-
-            success: true,
-
-            data: {
-
-                goldRate: price.metalRate,
-
-                goldValue: price.metalValue,
-
-                wastageAmount: price.wastageAmount,
-
-                stoneValue: price.stoneValue,
-
-                makingCharge: price.makingCharges,
-
-                discountAmount: price.discountAmount,
-
-                gstAmount: price.gstAmount,
-
-                unitPrice: price.finalPrice,
-
-                totalPrice: price.finalPrice * quantity
-
-            }
-
-        });
-
+    if (!product || !variant || !quantity) {
+      return res.status(400).json({
+        success: false,
+        message: "Product, Variant and Quantity are required.",
+      });
     }
 
-    catch (error) {
+    const productData = await Product.findById(product);
 
-        return res.status(500).json({
-
-            success: false,
-
-            message: error.message
-
-        });
-
+    if (!productData) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found.",
+      });
     }
 
+    const variantData = productData.variants.id(variant);
+
+    if (!variantData) {
+      return res.status(404).json({
+        success: false,
+        message: "Variant not found.",
+      });
+    }
+
+    const price = await calculateVariantPrice(variantData);
+
+    return res.status(200).json({
+      success: true,
+
+      data: {
+        goldRate: price.metalRate,
+
+        goldValue: price.metalValue,
+
+        wastageAmount: price.wastageAmount,
+
+        stoneValue: price.stoneValue,
+
+        makingCharge: price.makingCharges,
+
+        discountAmount: price.discountAmount,
+
+        gstAmount: price.gstAmount,
+
+        unitPrice: price.finalPrice,
+
+        totalPrice: price.finalPrice * quantity,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+
+      message: error.message,
+    });
+  }
 };
-
 
 exports.deleteOrder = async (req, res) => {
-    try {
+  try {
+    const { id } = req.params;
 
-        const { id } = req.params;
+    // Check Order
+    const order = await Order.findById(id);
 
-        // Check Order
-        const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
 
-        if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: "Order not found."
-            });
+    // Delete Order
+    await Order.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      message: "Order deleted successfully.",
+    });
+  } catch (error) {
+    console.log(error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const getOrdersBySource = async (req, res, orderSource) => {
+  try {
+    let page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 10;
+
+    if (page < 1) page = 1;
+    if (limit < 1) limit = 10;
+
+    const skip = (page - 1) * limit;
+
+    const search = req.query.search?.trim() || "";
+
+    const query = {
+      orderSource,
+    };
+
+    if (search) {
+      query.$or = [
+        {
+          orderNumber: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+        {
+          invoiceNumber: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+        {
+          "customerDetails.name": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+        {
+          "customerDetails.phone": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+      ];
+    }
+
+    if (req.query.orderStatus) {
+      query.orderStatus = req.query.orderStatus;
+    }
+
+    if (req.query.paymentStatus) {
+      query.paymentStatus = req.query.paymentStatus;
+    }
+
+    // Branch orders lo specific branch filter
+    if (orderSource === "BRANCH" && req.query.branch) {
+      query.branch = req.query.branch;
+    }
+
+    // Sub branch orders lo specific sub branch filter
+    if (orderSource === "SUB_BRANCH" && req.query.subBranch) {
+      query.subBranch = req.query.subBranch;
+    }
+
+    const totalOrders = await Order.countDocuments(query);
+
+    const orders = await Order.find(query)
+      .populate({
+        path: "user",
+        select: "name email phone",
+      })
+      .populate({
+        path: "items.product",
+        select: "name slug images",
+      })
+      .populate({
+        path: "branch",
+        select: "name email phone role",
+      })
+      .populate({
+        path: "subBranch",
+        select: "name email phone role",
+      })
+      .populate({
+        path: "createdBy",
+        select: "name email phone role",
+      })
+      .populate({
+        path: "address",
+      })
+      .populate({
+        path: "items.stockAllocations.supplierPurchaseItem",
+        select:
+          "purchase supplierProductCode batchNumber quantity availableQuantity purchasePrice discount tax totalAmount notes",
+        populate: {
+          path: "purchase",
+          select:
+            "supplier invoiceNumber invoiceDate purchaseDate status paymentStatus",
+          populate: {
+            path: "supplier",
+            select: "name companyName phone email gstNumber address",
+          },
+        },
+      })
+      .populate({
+        path: "items.stockAllocations.makerProductionItem",
+        select:
+          "production quantityGiven quantityReceived availableQuantity notes",
+        populate: {
+          path: "production",
+          select:
+            "maker productionNumber issueDate expectedDate receivedDate status notes",
+          populate: {
+            path: "maker",
+            select: "name phone email address specialization notes",
+          },
+        },
+      })
+      .sort({
+        createdAt: -1,
+      })
+      .skip(skip)
+      .limit(limit);
+
+    const formattedOrders = orders.map((order) => {
+      const orderObj = order.toObject();
+
+      orderObj.items = orderObj.items.map((item) => {
+        item.stockAllocations = item.stockAllocations?.map((allocation) => {
+          if (allocation.sourceType === "SUPPLIER") {
+            const supplierItem = allocation.supplierPurchaseItem;
+            const purchase = supplierItem?.purchase;
+            const supplier = purchase?.supplier;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "SUPPLIER",
+                supplierPurchaseItemId: supplierItem?._id || null,
+
+                supplier: supplier
+                  ? {
+                      _id: supplier._id,
+                      name: supplier.name,
+                      companyName: supplier.companyName,
+                      phone: supplier.phone,
+                      email: supplier.email,
+                      gstNumber: supplier.gstNumber,
+                      address: supplier.address,
+                    }
+                  : null,
+
+                purchase: purchase
+                  ? {
+                      _id: purchase._id,
+                      invoiceNumber: purchase.invoiceNumber,
+                      invoiceDate: purchase.invoiceDate,
+                      purchaseDate: purchase.purchaseDate,
+                      status: purchase.status,
+                      paymentStatus: purchase.paymentStatus,
+                    }
+                  : null,
+
+                supplierProductCode: supplierItem?.supplierProductCode || "",
+                batchNumber: supplierItem?.batchNumber || "",
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          if (allocation.sourceType === "MAKER") {
+            const makerItem = allocation.makerProductionItem;
+            const production = makerItem?.production;
+            const maker = production?.maker;
+
+            return {
+              ...allocation,
+
+              sourceDetails: {
+                sourceType: "MAKER",
+                makerProductionItemId: makerItem?._id || null,
+
+                maker: maker
+                  ? {
+                      _id: maker._id,
+                      name: maker.name,
+                      phone: maker.phone,
+                      email: maker.email,
+                      specialization: maker.specialization,
+                      address: maker.address,
+                    }
+                  : null,
+
+                production: production
+                  ? {
+                      _id: production._id,
+                      productionNumber: production.productionNumber,
+                      issueDate: production.issueDate,
+                      expectedDate: production.expectedDate,
+                      receivedDate: production.receivedDate,
+                      status: production.status,
+                    }
+                  : null,
+
+                allocatedQuantity: allocation.quantity,
+              },
+            };
+          }
+
+          return allocation;
+        });
+
+        return item;
+      });
+
+      return orderObj;
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `${orderSource} orders fetched successfully`,
+      data: formattedOrders,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalOrders / limit),
+        totalOrders,
+        limit,
+        hasNextPage: page < Math.ceil(totalOrders / limit),
+        hasPreviousPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error("Get Orders By Source Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch orders",
+    });
+  }
+};
+
+exports.getCustomerOrders = async (req, res) => {
+  await getOrdersBySource(req, res, "ONLINE");
+};
+
+exports.getAllBranchOrders = async (req, res) => {
+  await getOrdersBySource(req, res, "BRANCH");
+};
+
+exports.getAllSubBranchOrders = async (req, res) => {
+  await getOrdersBySource(req, res, "SUB_BRANCH");
+};
+
+exports.createPosRazorpayOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    if (!userId || !["BRANCH", "SUB_BRANCH"].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Branch and Sub-Branch users can initiate POS payments",
+      });
+    }
+
+    const { items, customerDetails } = req.body;
+
+    // 1. Validate logged-in Admin
+    const admin = await Admin.findById(userId);
+
+    if (!admin || !admin.isActive || admin.role !== role) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid or inactive branch account",
+      });
+    }
+
+    let branchId = null;
+    let subBranchId = null;
+
+    if (role === "BRANCH") {
+      branchId = admin._id;
+    } else {
+      if (!admin.branchId) {
+        return res.status(400).json({
+          success: false,
+          message: "Parent branch not assigned to this Sub-Branch",
+        });
+      }
+
+      const parentBranch = await Admin.findOne({
+        _id: admin.branchId,
+        role: "BRANCH",
+        isActive: true,
+      });
+
+      if (!parentBranch) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid or inactive parent branch",
+        });
+      }
+
+      branchId = parentBranch._id;
+      subBranchId = admin._id;
+    }
+
+    // 2. Validate customer details
+    if (!customerDetails?.name?.trim() || !customerDetails?.phone?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name and phone are required",
+      });
+    }
+
+    if (!/^[0-9]{10}$/.test(customerDetails.phone.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid 10-digit customer phone number",
+      });
+    }
+
+    // 3. Validate cart items
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one product is required",
+      });
+    }
+
+    let checkoutItems = items.map((item) => ({
+      productId:
+        item.productId ||
+        (typeof item.product === "object" ? item.product?._id : item.product),
+
+      variantId:
+        item.variantId ||
+        (typeof item.variant === "object" ? item.variant?._id : item.variant),
+
+      quantity: Number(item.quantity),
+    }));
+
+    // 4. Aggregate duplicate products and variants
+    const aggregatedItems = new Map();
+
+    for (const item of checkoutItems) {
+      if (
+        !mongoose.Types.ObjectId.isValid(item.productId) ||
+        !mongoose.Types.ObjectId.isValid(item.variantId) ||
+        !Number.isInteger(item.quantity) ||
+        item.quantity < 1
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid product, variant or quantity",
+        });
+      }
+
+      const key = `${item.productId}_${item.variantId}`;
+
+      if (aggregatedItems.has(key)) {
+        aggregatedItems.get(key).quantity += item.quantity;
+      } else {
+        aggregatedItems.set(key, { ...item });
+      }
+    }
+
+    checkoutItems = Array.from(aggregatedItems.values());
+
+    // 5. Load products and calculate backend prices
+    let totalAmount = 0;
+    const paymentAttemptItems = [];
+
+    for (const item of checkoutItems) {
+      const product = await Product.findById(item.productId);
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      const variant = product.variants.id(item.variantId);
+
+      if (!variant) {
+        return res.status(404).json({
+          success: false,
+          message: `Variant not found for ${product.name}`,
+        });
+      }
+
+      const priceDetails = await calculateVariantPrice(variant);
+      const unitPrice = Number(priceDetails?.finalPrice);
+
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid price for ${product.name}`,
+        });
+      }
+
+      const finalUnitPrice = Number(unitPrice.toFixed(2));
+
+      const itemTotalPrice = Number(
+        (finalUnitPrice * item.quantity).toFixed(2),
+      );
+
+      totalAmount += itemTotalPrice;
+
+      paymentAttemptItems.push({
+        product: product._id,
+        variantId: variant._id.toString(),
+        quantity: item.quantity,
+
+        productSnapshot: product.toObject({
+          depopulate: true,
+          versionKey: false,
+        }),
+
+        variantSnapshot: variant.toObject({
+          depopulate: true,
+          versionKey: false,
+        }),
+
+        pricingSnapshot: priceDetails,
+        unitPrice: finalUnitPrice,
+        totalPrice: itemTotalPrice,
+
+        stockAllocations: [],
+        stockReservationStatus: "NOT_RESERVED",
+      });
+    }
+
+    totalAmount = Number(totalAmount.toFixed(2));
+
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment amount",
+      });
+    }
+
+    // 6. Create Razorpay order
+    const razorpayOrder = await razorpay.orders.create({
+      amount: Math.round(totalAmount * 100),
+      currency: "INR",
+      receipt: `pos_${Date.now()}`,
+    });
+
+    let createdAttempt;
+
+    // 7. Reserve stock and create PaymentAttempt atomically
+    await session.withTransaction(async () => {
+      for (const item of paymentAttemptItems) {
+        const productId = item.product;
+        const variantId = new mongoose.Types.ObjectId(item.variantId);
+
+        let remainingQuantity = item.quantity;
+        const allocations = [];
+
+        // A. Supplier stock first - FIFO
+        const supplierItems = await SupplierPurchaseItem.find({
+          product: productId,
+          variantId,
+          availableQuantity: { $gt: 0 },
+        })
+          .sort({ createdAt: 1, _id: 1 })
+          .session(session);
+
+        for (const source of supplierItems) {
+          if (remainingQuantity <= 0) break;
+
+          const available = Number(source.availableQuantity);
+          const take = Math.min(available, remainingQuantity);
+
+          const result = await SupplierPurchaseItem.updateOne(
+            {
+              _id: source._id,
+              availableQuantity: { $gte: take },
+            },
+            {
+              $inc: {
+                availableQuantity: -take,
+              },
+            },
+            { session },
+          );
+
+          if (result.modifiedCount !== 1) {
+            throw new Error("Supplier stock changed. Please try again.");
+          }
+
+          allocations.push({
+            sourceType: "SUPPLIER",
+            sourceItemId: source._id,
+            quantity: take,
+          });
+
+          remainingQuantity -= take;
         }
 
-        // Delete Order
-        await Order.findByIdAndDelete(id);
+        // B. Maker stock next - FIFO
+        if (remainingQuantity > 0) {
+          const makerItems = await MakerProductionItem.find({
+            product: productId,
+            variantId,
+            availableQuantity: { $gt: 0 },
+          })
+            .sort({ createdAt: 1, _id: 1 })
+            .session(session);
 
-        return res.status(200).json({
-            success: true,
-            message: "Order deleted successfully."
-        });
+          for (const source of makerItems) {
+            if (remainingQuantity <= 0) break;
 
-    } catch (error) {
+            const available = Number(source.availableQuantity);
+            const take = Math.min(available, remainingQuantity);
 
-        console.log(error);
+            const result = await MakerProductionItem.updateOne(
+              {
+                _id: source._id,
+                availableQuantity: { $gte: take },
+              },
+              {
+                $inc: {
+                  availableQuantity: -take,
+                },
+              },
+              { session },
+            );
 
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
+            if (result.modifiedCount !== 1) {
+              throw new Error("Maker stock changed. Please try again.");
+            }
 
+            allocations.push({
+              sourceType: "MAKER",
+              sourceItemId: source._id,
+              quantity: take,
+            });
+
+            remainingQuantity -= take;
+          }
+        }
+
+        // C. Check actual source stock
+        if (remainingQuantity > 0) {
+          throw new Error(
+            `Insufficient source stock for ${item.variantSnapshot.sku}`,
+          );
+        }
+
+        // D. Reduce aggregate Product variant stock
+        const stockResult = await Product.updateOne(
+          {
+            _id: productId,
+            variants: {
+              $elemMatch: {
+                _id: variantId,
+                stock: { $gte: item.quantity },
+              },
+            },
+          },
+          {
+            $inc: {
+              "variants.$.stock": -item.quantity,
+            },
+          },
+          { session },
+        );
+
+        if (stockResult.modifiedCount !== 1) {
+          throw new Error(
+            `Product stock mismatch for ${item.variantSnapshot.sku}`,
+          );
+        }
+
+        // E. Save reservation details
+        item.stockAllocations = allocations;
+        item.stockReservationStatus = "RESERVED";
+        item.stockReservedAt = new Date();
+        item.stockReservationExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      }
+
+      // F. Create POS PaymentAttempt
+      const attemptData = {
+        orderSource: role,
+        branch: branchId,
+        subBranch: subBranchId,
+        createdBy: admin._id,
+
+        customerDetails: {
+          name: customerDetails.name.trim(),
+          phone: customerDetails.phone.trim(),
+          email: customerDetails.email?.trim() || "",
+        },
+
+        paymentMethod: "UPI",
+        checkoutMode: "POS",
+
+        amount: totalAmount,
+        currency: "INR",
+        razorpayOrderId: razorpayOrder.id,
+        status: "CREATED",
+
+        items: paymentAttemptItems,
+      };
+
+      const attempts = await PaymentAttempt.create([attemptData], { session });
+
+      createdAttempt = attempts[0];
+    });
+
+    // 8. Return Razorpay details
+    return res.status(201).json({
+      success: true,
+      message: "POS stock reserved and Razorpay order created",
+      data: {
+        paymentAttemptId: createdAttempt._id,
+        razorpayOrderId: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+      },
+    });
+  } catch (error) {
+    console.error("Create POS Razorpay Order Error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Unable to initiate POS payment",
+    });
+  } finally {
+    await session.endSession();
+  }
+};
+
+exports.verifyPosRazorpayPayment = async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    const {
+      paymentAttemptId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body;
+
+    // 1. Validate logged-in user
+    if (!userId || !["BRANCH", "SUB_BRANCH"].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized POS payment verification",
+      });
     }
+
+    if (
+      !paymentAttemptId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment verification details are required",
+      });
+    }
+
+    // 2. Validate Admin
+    const admin = await Admin.findById(userId);
+
+    if (!admin || !admin.isActive || admin.role !== role) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid or inactive branch account",
+      });
+    }
+
+    // 3. Find PaymentAttempt and validate ownership
+    const attemptQuery = {
+      _id: paymentAttemptId,
+      razorpayOrderId: razorpay_order_id,
+      orderSource: role,
+    };
+
+    if (role === "BRANCH") {
+      attemptQuery.branch = admin._id;
+      attemptQuery.subBranch = null;
+    } else {
+      if (!admin.branchId) {
+        return res.status(403).json({
+          success: false,
+          message: "Sub-Branch parent branch not found",
+        });
+      }
+
+      attemptQuery.branch = admin.branchId;
+      attemptQuery.subBranch = admin._id;
+    }
+
+    const attempt = await PaymentAttempt.findOne(attemptQuery);
+
+    if (!attempt) {
+      return res.status(404).json({
+        success: false,
+        message: "POS payment attempt not found",
+      });
+    }
+
+    // 4. If order already created, return existing order
+    if (attempt.status === "ORDER_CREATED" && attempt.order) {
+      return res.status(200).json({
+        success: true,
+        message: "Order already created",
+        data: {
+          orderId: attempt.order,
+          paymentAttemptId: attempt._id,
+          status: "ORDER_CREATED",
+        },
+      });
+    }
+
+    if (!["CREATED", "PAID"].includes(attempt.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment attempt status is ${attempt.status}`,
+      });
+    }
+
+    // 5. Verify Razorpay signature
+    const generatedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+
+    const signatureBuffer = Buffer.from(generatedSignature, "hex");
+    const receivedSignatureBuffer = Buffer.from(razorpay_signature, "hex");
+
+    if (
+      signatureBuffer.length !== receivedSignatureBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, receivedSignatureBuffer)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Razorpay payment signature",
+      });
+    }
+
+    // 6. Fetch actual payment details from Razorpay
+    const payment = await razorpay.payments.fetch(razorpay_payment_id);
+
+    if (
+      payment.order_id !== attempt.razorpayOrderId ||
+      payment.amount !== Math.round(attempt.amount * 100) ||
+      payment.currency !== attempt.currency
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Razorpay payment details mismatch",
+      });
+    }
+
+    if (payment.status !== "captured") {
+      return res.status(400).json({
+        success: false,
+        message: `Payment is not captured. Current status: ${payment.status}`,
+      });
+    }
+
+    // 7. Prevent payment ID mismatch on retry
+    if (
+      attempt.razorpayPaymentId &&
+      attempt.razorpayPaymentId !== razorpay_payment_id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment ID does not match this payment attempt",
+      });
+    }
+
+    attempt.status = "PAID";
+    attempt.razorpayPaymentId = razorpay_payment_id;
+
+    await attempt.save();
+
+    // 8. Build order items from reserved PaymentAttempt
+    const orderItems = attempt.items.map((item) => ({
+      product: item.product,
+      variant: item.variantId,
+      quantity: item.quantity,
+
+      productSnapshot: item.productSnapshot,
+      variantSnapshot: item.variantSnapshot,
+      pricingSnapshot: item.pricingSnapshot,
+
+      unitPrice: item.unitPrice,
+      totalPrice: item.totalPrice,
+    }));
+
+    // 9. Call existing createOrder controller
+    // This reuses the existing invoice PDF and WhatsApp logic.
+    let responseStatus = 200;
+    let responseData = null;
+
+    const mockRes = {
+      status(code) {
+        responseStatus = code;
+        return this;
+      },
+
+      json(data) {
+        responseData = data;
+        return this;
+      },
+    };
+
+    await exports.createOrder(
+      {
+        user: req.user,
+
+        body: {
+          orderSource: attempt.orderSource,
+
+          branch: attempt.branch,
+          subBranch: attempt.subBranch,
+          createdBy: attempt.createdBy,
+
+          customerDetails: attempt.customerDetails,
+
+          paymentMethod: "UPI",
+
+          razorpayOrderId: attempt.razorpayOrderId,
+          razorpayPaymentId,
+          paymentAttemptId: attempt._id,
+
+          items: orderItems,
+        },
+      },
+      mockRes,
+    );
+
+    // 10. Handle createOrder response
+    if (!responseData?.success) {
+      // Payment is already captured.
+      // Keep attempt as PAID for safe recovery/retry.
+      return res.status(500).json({
+        success: false,
+        paymentCaptured: true,
+        message:
+          responseData?.message ||
+          "Payment successful, but order creation failed",
+        paymentAttemptId: attempt._id,
+        status: "PAID",
+      });
+    }
+
+    // 11. Return successful order
+    const createdOrder = responseData.data;
+
+    return res.status(200).json({
+      success: true,
+      message: "POS payment verified and order created successfully",
+      data: {
+        paymentAttemptId: attempt._id,
+        orderId: createdOrder?._id,
+        order: createdOrder,
+        status: "ORDER_CREATED",
+      },
+    });
+  } catch (error) {
+    console.error("Verify POS Razorpay Payment Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Unable to verify POS payment",
+    });
+  }
 };

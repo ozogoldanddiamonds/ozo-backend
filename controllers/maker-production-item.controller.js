@@ -15,11 +15,6 @@ const isValidObjectId = (id) => {
 
 };
 
-// =====================================================
-// CREATE MAKER PRODUCTION ITEM
-// POST /create-maker-production-item
-// =====================================================
-
 exports.createMakerProductionItem = async (req, res) => {
     try {
 
@@ -976,7 +971,7 @@ exports.updateMakerProductionItem = async (req, res) => {
                 // Same product + same variant:
                 // apply only the received-quantity difference.
                 const stockDifference =
-                    finalQuantityReceived - oldQuantityReceived;
+                    finalAvailableQuantity - oldAvailableQuantity;
 
                 await adjustVariantStock(
                     finalProduct,

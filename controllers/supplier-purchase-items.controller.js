@@ -749,14 +749,65 @@ exports.updateSupplierPurchaseItem = async (req, res) => {
                 item.notes = notes?.trim() || "";
             }
 
-            // 15. Update the matched Product variant stock
-            // Product ID + Variant ID identifies the exact variant.
-            selectedVariant.stock = finalAvailableQuantity;
+            // 15. Update Product Variant Stock
 
-            // Save both changes in the same transaction
-            await productDoc.save({ session });
-            await item.save({ session });
+            const oldProductId = item.product.toString();
+            const oldVariantId = item.variantId.toString();
 
+            const sameVariant =
+                oldProductId === finalProduct.toString() &&
+                oldVariantId === finalVariantId.toString();
+
+            if (sameVariant) {
+
+                const stockDifference =
+                    finalAvailableQuantity - oldAvailableQuantity;
+
+                if (stockDifference !== 0) {
+                    await Product.updateOne(
+                        {
+                            _id: finalProduct,
+                            "variants._id": finalVariantId
+                        },
+                        {
+                            $inc: {
+                                "variants.$.stock": stockDifference
+                            }
+                        },
+                        { session }
+                    );
+                }
+
+            } else {
+
+                // Remove old supplier stock contribution
+                await Product.updateOne(
+                    {
+                        _id: item.product,
+                        "variants._id": item.variantId
+                    },
+                    {
+                        $inc: {
+                            "variants.$.stock": -oldAvailableQuantity
+                        }
+                    },
+                    { session }
+                );
+
+                // Add new supplier stock contribution
+                await Product.updateOne(
+                    {
+                        _id: finalProduct,
+                        "variants._id": finalVariantId
+                    },
+                    {
+                        $inc: {
+                            "variants.$.stock": finalAvailableQuantity
+                        }
+                    },
+                    { session }
+                );
+            }
             // 16. Return updated item
             responseData = await SupplierPurchaseItem.findById(
                 item._id

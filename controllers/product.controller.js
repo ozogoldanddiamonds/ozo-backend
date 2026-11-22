@@ -1012,47 +1012,65 @@ exports.updateProduct = async (req, res) => {
 
     }
 
-
     // =========================
-    // PARSE VARIANTS & AUTO SKU
+    // PARSE VARIANTS & PRESERVE IDs
     // =========================
 
     let variants = req.body.variants
       ? JSON.parse(req.body.variants)
-      : existingProduct.variants;
+      : existingProduct.variants.map(v => v.toObject());
 
-    // Existing variant IDs and SKUs
+    if (!Array.isArray(variants)) {
+      return res.status(400).json({
+        success: false,
+        message: "Variants must be an array"
+      });
+    }
+
     const existingVariants = existingProduct.variants || [];
 
     for (const variant of variants) {
 
-      // Check whether this variant already exists
-      const existingVariant = variant._id
+      // Match existing variant by ID first
+      let existingVariant = variant._id
         ? existingVariants.find(
           v => String(v._id) === String(variant._id)
         )
         : null;
 
+      // If frontend does not send _id, match by SKU
+      if (!existingVariant && variant.sku) {
+        existingVariant = existingVariants.find(
+          v => v.sku === variant.sku
+        );
+      }
+
       if (existingVariant) {
 
-        // Preserve existing SKU during update
+        // Preserve original Variant ID
+        variant._id = existingVariant._id;
+
+        // Preserve original SKU
         variant.sku = existingVariant.sku;
+
+        // Never overwrite stock from frontend
+        variant.stock = existingVariant.stock;
 
       } else {
 
-        // Generate SKU only for a new variant
-        if (!variant.sku || !variant.sku.trim()) {
+        // New variant: remove client-supplied ID
+        delete variant._id;
 
+        if (!variant.sku || !variant.sku.trim()) {
           variant.sku = `SKU-${Date.now()}-${Math.floor(
             1000 + Math.random() * 9000
           )}`;
-
         }
 
+        // New variant starts with zero stock
+        variant.stock = 0;
       }
-
     }
-
     // =========================
     // PARSE TAGS
     // =========================

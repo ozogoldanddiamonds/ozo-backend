@@ -3,7 +3,7 @@ const User = require("../models/user-login");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const sendOtpSms = require("../utils/send-otp-sms");
-
+const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
 const OTP_EXPIRY_MINUTES = 5;
 const OTP_RESEND_SECONDS = 60;
 
@@ -283,7 +283,8 @@ exports.refreshUserToken = async (req, res) => {
         }
 
         const refreshTokenHash = hashRefreshToken(refreshToken);
-
+        console.log("Incoming refresh token:", refreshToken);
+        console.log("Incoming refresh token hash:", refreshTokenHash);
         const user = await User.findOne({
             refreshTokenHash,
             refreshTokenExpiresAt: { $gt: new Date() }
@@ -357,4 +358,55 @@ exports.logoutUser = async (req, res) => {
             message: "Logout failed"
         });
     }
+};
+
+// SEND ORDER SUCCESS WHATSAPP
+exports.sendOrderWhatsApp = async (req, res) => {
+
+    try {
+
+        const {
+            phone,
+            customerName,
+            orderId,
+            orderDate,
+            orderAmount,
+            paymentStatus,
+            invoiceUrl
+        } = req.body;
+
+        if (!phone || !orderId || !orderAmount || !invoiceUrl) {
+            return res.status(400).json({
+                success: false,
+                message: "Required order details are missing"
+            });
+        }
+
+        const result = await sendOrderWhatsApp({
+            phone,
+            customerName,
+            orderId,
+            orderDate,
+            orderAmount,
+            paymentStatus,
+            invoiceUrl
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Order WhatsApp sent successfully",
+            data: result
+        });
+
+    } catch (error) {
+
+        console.error("Send Order WhatsApp Controller Error:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Unable to send order WhatsApp"
+        });
+
+    }
+
 };

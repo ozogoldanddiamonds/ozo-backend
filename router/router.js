@@ -3,56 +3,329 @@ const router = express.Router();
 
 // router.post("/upload", upload.single("image"), uploadImage);
 
+const {
+  register,
+  login,
+  forgotPassword,
+  resetPassword,
+  getAllSubBranches,
+  updateSubBranch,
+  getSubBranchById,
+  deleteSubBranch,
+  getBranchList,
+  updateSubBranchStatus,
+} = require("../controllers/user.controller");
+const {
+  createGoldRate,
+  getAllGoldRates,
+  getGoldRateById,
+  updateGoldRate,
+  deleteGoldRate,
+} = require("../controllers/goldrate.controller");
+const {
+  createCategory,
+  getAllCategories,
+  getCategoryById,
+  updateCategory,
+  deleteCategory,
+} = require("../controllers/category.controller");
+const {
+  getSubCategoryByCategory,
+  createSubCategory,
+  getAllSubCategories,
+  getSubCategoryById,
+  updateSubCategory,
+  deleteSubCategory,
+} = require("../controllers/subcategory.controller");
+const {
+  getSubSubCategoryBySubCategory,
+  createSubSubCategory,
+  getAllSubSubCategories,
+  getSubSubCategoryById,
+  updateSubSubCategory,
+  deleteSubSubCategory,
+} = require("../controllers/subsubcategory.controller");
+const {
+  createProduct,
+  getAllProducts,
+  getAllProductsWithPagination,
+  getProductsByType,
+  getProductById,
+  updateProduct,
+  deleteProduct,
+  getProductsByCategory,
+  getProductsByCategoryId,
+  changeProductStatus,
+} = require("../controllers/product.controller");
+const {
+  sendUserOtp,
+  verifyUserOtp,
+  resendUserOtp,
+  refreshUserToken,
+  logoutUser,
+  sendOrderWhatsApp,
+} = require("../controllers/user-otp-controller");
+const {
+  getAllUsers,
+  getUsersCount,
+  getProfileSummary,
+  userLogout,
+  Userregister,
+  userLogin,
+  userforgotPassword,
+  verifyOTP,
+  resendOTP,
+  userresetPassword,
+  googleLogin,
+  updateProfile,
+  getUserById,
+} = require("../controllers/userlogin.controller");
+const {
+  addToCart,
+  getCart,
+  updateCartItem,
+  removeCartItem,
+  clearCart,
+} = require("../controllers/cart.controller");
+const {
+  addToWishlist,
+  getWishlist,
+  removeWishlistItem,
+} = require("../controllers/wishlist.controller");
+const {
+  createAddress,
+  getAddresses,
+  getAddressById,
+  updateAddress,
+  deleteAddress,
+  getAllAddresses,
+  setDefaultAddress,
+} = require("../controllers/address.controller");
+const {
+  createBanner,
+  updateBanner,
+  getAllBanners,
+  deleteBanner,
+} = require("../controllers/banner.controller");
+const {
+  createContact,
+  getAllContacts,
+  getContactById,
+  updateContact,
+  deleteContact,
+} = require("../controllers/contact.controller");
+const {
+  createCoupon,
+  getAllCoupons,
+  getCouponById,
+  updateCoupon,
+  deleteCoupon,
+} = require("../controllers/coupon.controller");
+const {
+  createReview,
+  getAllReviews,
+  getReviewById,
+  getProductReviews,
+  updateReview,
+  deleteReview,
+} = require("../controllers/review.controller");
+const {
+  createMetalRate,
+  getAllMetalRates,
+  getMetalRateById,
+  updateMetalRate,
+  deleteMetalRate,
+  toggleMetalRateStatus,
+} = require("../controllers/metal-rate.controller");
+const {
+  createStoneRate,
+  getAllStoneRates,
+  getStoneRateById,
+  updateStoneRate,
+  deleteStoneRate,
+  toggleStoneRateStatus,
+} = require("../controllers/stone-rate.controller");
+const {
+  calculatePrice,
+  deleteOrder,
+  createRazorpayOrder,
+  verifyRazorpayPayment,
+  createOrder,
+  createPosRazorpayOrder,
+  verifyPosRazorpayPayment,
+  getAllOrders,
+  getCustomerOrders,
+  getAllBranchOrders,
+  getAllSubBranchOrders,
+  getOrderById,
+  getOrdersByUser,
+  getBranchOrders,
+  getSubBranchOrders,
+} = require("../controllers/order.controller");
 
-
-
-const { register, login, forgotPassword, resetPassword, getAllSubBranches, updateSubBranch, getSubBranchById, deleteSubBranch, getBranchList, updateSubBranchStatus } = require('../controllers/user.controller');
-const { createGoldRate, getAllGoldRates, getGoldRateById, updateGoldRate, deleteGoldRate } = require("../controllers/goldrate.controller");
-const { createCategory, getAllCategories, getCategoryById, updateCategory, deleteCategory } = require("../controllers/category.controller");
-const { getSubCategoryByCategory, createSubCategory, getAllSubCategories, getSubCategoryById, updateSubCategory, deleteSubCategory } = require("../controllers/subcategory.controller");
-const { getSubSubCategoryBySubCategory, createSubSubCategory, getAllSubSubCategories, getSubSubCategoryById, updateSubSubCategory, deleteSubSubCategory } = require("../controllers/subsubcategory.controller");
-const { createProduct, getAllProducts, getAllProductsWithPagination, getProductsByType, getProductById, updateProduct, deleteProduct, getProductsByCategory, getProductsByCategoryId, changeProductStatus } = require("../controllers/product.controller");
-const { sendUserOtp, verifyUserOtp, resendUserOtp, refreshUserToken, logoutUser } = require("../controllers/user-otp-controller");
-const { getAllUsers, getUsersCount, getProfileSummary, userLogout, Userregister, userLogin, userforgotPassword, verifyOTP, resendOTP, userresetPassword, googleLogin, updateProfile, getUserById } = require("../controllers/userlogin.controller");
-const { addToCart, getCart, updateCartItem, removeCartItem, clearCart } = require("../controllers/cart.controller");
-const { addToWishlist, getWishlist, removeWishlistItem } = require("../controllers/wishlist.controller");
-const { createAddress, getAddresses, getAddressById, updateAddress, deleteAddress, getAllAddresses, setDefaultAddress } = require("../controllers/address.controller");
-const { createBanner, updateBanner, getAllBanners, deleteBanner } = require("../controllers/banner.controller");
-const { createContact, getAllContacts, getContactById, updateContact, deleteContact } = require("../controllers/contact.controller");
-const { createCoupon, getAllCoupons, getCouponById, updateCoupon, deleteCoupon } = require("../controllers/coupon.controller");
-const { createReview, getAllReviews, getReviewById, getProductReviews, updateReview, deleteReview } = require("../controllers/review.controller");
-const { createMetalRate, getAllMetalRates, getMetalRateById, updateMetalRate, deleteMetalRate, toggleMetalRateStatus } = require("../controllers/metal-rate.controller");
-const { createStoneRate, getAllStoneRates, getStoneRateById, updateStoneRate, deleteStoneRate, toggleStoneRateStatus } = require("../controllers/stone-rate.controller");
-const { calculatePrice, deleteOrder, createRazorpayOrder, verifyRazorpayPayment, createOrder, getAllOrders, getOrderById, getOrdersByUser, getBranchOrders, getSubBranchOrders } = require("../controllers/order.controller");
-
-const { createSizeChart, getAllSizeCharts, getSizeChartBySubCategory, updateSizeChart, deleteSizeChart } = require("../controllers/size-chart.controller");
-const { createAds, getAllAds, getAdsById, updateSection, deleteAds, updateAdsStatus } = require("../controllers/adss.controller");
-const { createEmployee, getAllEmployees, getEmployeeById, updateEmployee, updateEmployeeStatus, deleteEmployee, getEmployeesByBranch } = require('../controllers/employee.controller');
-const { assignProductToSubBranch, getAssignedProducts, returnAssignedProduct, assignMultipleProducts, getAssignedProductsBySubBranch } = require("../controllers/assignProduct-subbranch");
-const { createScheme, getAllSchemes, getSchemeById, updateScheme, deleteScheme, updateSchemeStatus } = require("../controllers/scheme.controller");
-const { createUserScheme, getAllUserSchemes, getUserSchemeByUserId, updateUserScheme, deleteUserScheme, getUserSchemeById } = require("../controllers/userscheme.controller");
-const { createSchemeRazorpayOrder, verifySchemeRazorpayPayment, createPayment, getAllPayments, getPaymentById, updatePayment, deletePayment, getUserPayments, getPaymentHistory } = require("../controllers/schema-payment.controller");
-const { createBrand, getAllBrands, getActiveBrands, getBrandById, updateBrand, deleteBrand } = require("../controllers/brand.controller");
+const {
+  createSizeChart,
+  getAllSizeCharts,
+  getSizeChartBySubCategory,
+  updateSizeChart,
+  deleteSizeChart,
+} = require("../controllers/size-chart.controller");
+const {
+  createAds,
+  getAllAds,
+  getAdsById,
+  updateSection,
+  deleteAds,
+  updateAdsStatus,
+} = require("../controllers/adss.controller");
+const {
+  createEmployee,
+  getAllEmployees,
+  getEmployeeById,
+  updateEmployee,
+  updateEmployeeStatus,
+  deleteEmployee,
+  getEmployeesByBranch,
+} = require("../controllers/employee.controller");
+const {
+  assignProductToSubBranch,
+  getAssignedProducts,
+  returnAssignedProduct,
+  assignMultipleProducts,
+  getAssignedProductsBySubBranch,
+} = require("../controllers/assignProduct-subbranch");
+const {
+  createScheme,
+  getAllSchemes,
+  getSchemeById,
+  updateScheme,
+  deleteScheme,
+  updateSchemeStatus,
+} = require("../controllers/scheme.controller");
+const {
+  createUserScheme,
+  getAllUserSchemes,
+  getUserSchemeByUserId,
+  updateUserScheme,
+  deleteUserScheme,
+  getUserSchemeById,
+} = require("../controllers/userscheme.controller");
+const {
+  createSchemeRazorpayOrder,
+  verifySchemeRazorpayPayment,
+  createPayment,
+  getAllPayments,
+  getPaymentById,
+  updatePayment,
+  deletePayment,
+  getUserPayments,
+  getPaymentHistory,
+} = require("../controllers/schema-payment.controller");
+const {
+  createBrand,
+  getAllBrands,
+  getActiveBrands,
+  getBrandById,
+  updateBrand,
+  deleteBrand,
+} = require("../controllers/brand.controller");
 
 // const router = express.Router();
-
 
 const upload = require("../middleware/upload");
 const { verifyToken } = require("../middleware/auth");
 
 const { uploadCertificate } = require("../controllers/upload.controller");
-const { createSupplier, getAllSuppliers, getActiveSuppliers, getSupplierById, updateSupplier, deleteSupplier, updateSupplierStatus } = require("../controllers/supplier.controller");
-const { createSupplierPurchase, getAllSupplierPurchases, getSupplierPurchaseById, getSupplierPurchases, updateSupplierPurchase, addPurchaseDocument, deletePurchaseDocument, updatePurchasePaymentStatus, updateSupplierPurchaseStatus, deleteSupplierPurchase } = require("../controllers/supplier-purchase.controller")
-const { createSupplierPurchaseItem, getAllSupplierPurchaseItems, getPurchaseItemsByPurchase, getPurchaseItemsByProduct, getPurchaseItemsByVariant, updateSupplierPurchaseItem, deleteSupplierPurchaseItem, getSupplierPurchaseItemById } = require("../controllers/supplier-purchase-items.controller");
-const { createMaker, getAllMakers, getActiveMakers, getMakerById, updateMaker, deleteMaker, updateMakerStatus } = require("../controllers/maker.controller");
-const { createMakerProduction, getAllMakerProductions, getMakerProductionById, getMakerProductionsByMaker, updateMakerProduction, updateMakerProductionStatus, deleteMakerProduction } = require("../controllers/maker-production.controller");
-const { createMakerProductionItem, getAllMakerProductionItems, getProductionItems, getProductProductionItems, getVariantProductionItems, getMakerProductionItemById, updateMakerProductionItem, deleteMakerProductionItem } = require("../controllers/maker-production-item.controller");
+const {
+  createSupplier,
+  getAllSuppliers,
+  getActiveSuppliers,
+  getSupplierById,
+  updateSupplier,
+  deleteSupplier,
+  updateSupplierStatus,
+} = require("../controllers/supplier.controller");
+const {
+  createSupplierPurchase,
+  getAllSupplierPurchases,
+  getSupplierPurchaseById,
+  getSupplierPurchases,
+  updateSupplierPurchase,
+  addPurchaseDocument,
+  deletePurchaseDocument,
+  updatePurchasePaymentStatus,
+  updateSupplierPurchaseStatus,
+  deleteSupplierPurchase,
+} = require("../controllers/supplier-purchase.controller");
+const {
+  createSupplierPurchaseItem,
+  getAllSupplierPurchaseItems,
+  getPurchaseItemsByPurchase,
+  getPurchaseItemsByProduct,
+  getPurchaseItemsByVariant,
+  updateSupplierPurchaseItem,
+  deleteSupplierPurchaseItem,
+  getSupplierPurchaseItemById,
+} = require("../controllers/supplier-purchase-items.controller");
+const {
+  createMaker,
+  getAllMakers,
+  getActiveMakers,
+  getMakerById,
+  updateMaker,
+  deleteMaker,
+  updateMakerStatus,
+} = require("../controllers/maker.controller");
+const {
+  createMakerProduction,
+  getAllMakerProductions,
+  getMakerProductionById,
+  getMakerProductionsByMaker,
+  updateMakerProduction,
+  updateMakerProductionStatus,
+  deleteMakerProduction,
+} = require("../controllers/maker-production.controller");
+const {
+  createMakerProductionItem,
+  getAllMakerProductionItems,
+  getProductionItems,
+  getProductProductionItems,
+  getVariantProductionItems,
+  getMakerProductionItemById,
+  updateMakerProductionItem,
+  deleteMakerProductionItem,
+} = require("../controllers/maker-production-item.controller");
 
-const { createCustomDesignRequest, getMyCustomDesignRequests, getMyCustomDesignRequestById, cancelMyCustomDesignRequest, getAllCustomDesignRequests, getCustomDesignRequestById, updateCustomDesignRequestStatus, updateCustomDesignRequestNotes, deleteCustomDesignRequest, updateMyCustomDesignRequest } = require("../controllers/custom-design.controller");
-const { getMetaKeyWord, upsertMetaKeyWordsSEO, getMetaKeywordsSEOById } = require("../controllers/meta-key-words.controller");
-const { verifyPickupAddress, checkDeliveryPincode, saveShipmentPackages, bookSequelShipment, getSequelShipmentTracking, trackMultipleOrders, cancelSequelShipmentOrder, downloadOrderPOD } = require("../controllers/sequel247.controller");
-const { fetchWhatsAppTemplates } = require("../controllers/whatsapp.controller");
-
+const {
+  createCustomDesignRequest,
+  getMyCustomDesignRequests,
+  getMyCustomDesignRequestById,
+  cancelMyCustomDesignRequest,
+  getAllCustomDesignRequests,
+  getCustomDesignRequestById,
+  updateCustomDesignRequestStatus,
+  updateCustomDesignRequestNotes,
+  deleteCustomDesignRequest,
+  updateMyCustomDesignRequest,
+} = require("../controllers/custom-design.controller");
+const {
+  getMetaKeyWord,
+  upsertMetaKeyWordsSEO,
+  getMetaKeywordsSEOById,
+} = require("../controllers/meta-key-words.controller");
+const {
+  verifyPickupAddress,
+  checkDeliveryPincode,
+  saveShipmentPackages,
+  bookSequelShipment,
+  getSequelShipmentTracking,
+  trackMultipleOrders,
+  cancelSequelShipmentOrder,
+  downloadOrderPOD,
+} = require("../controllers/sequel247.controller");
+const {
+  fetchWhatsAppTemplates,
+} = require("../controllers/whatsapp.controller");
 
 router.post("/create-contact", createContact);
 router.get("/getall-contact", getAllContacts);
@@ -60,22 +333,19 @@ router.post("/getbyid-contact/:id", getContactById);
 router.put("/update-contact/:id", updateContact);
 router.delete("/delete-contact/:id", deleteContact);
 
-
-
-router.post('/register', register);
-router.post('/login', login);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
-router.get('/get-all-subbranches', getAllSubBranches);
-router.put('/update-subbranch/:id', updateSubBranch);
+router.post("/register", register);
+router.post("/login", login);
+router.post("/forgot-password", forgotPassword);
+router.post("/reset-password", resetPassword);
+router.get("/get-all-subbranches", getAllSubBranches);
+router.put("/update-subbranch/:id", updateSubBranch);
 router.put("/update-subbranch-status/:id", updateSubBranchStatus);
-router.get('/getSubBranchById/:id', getSubBranchById);
-router.delete('/delete-subbranch/:id', deleteSubBranch);
-router.get('/get-branch-list', getBranchList);
+router.get("/getSubBranchById/:id", getSubBranchById);
+router.delete("/delete-subbranch/:id", deleteSubBranch);
+router.get("/get-branch-list", getBranchList);
 router.post("/google-login", googleLogin);
 router.put("/updateProfile/:userId", updateProfile);
 router.get("/getUserById/:userId", getUserById);
-
 
 // gold Rate
 
@@ -85,7 +355,7 @@ router.get("/gold-rate/:id", getGoldRateById);
 router.put("/gold-rate/:id", updateGoldRate);
 router.delete("/gold-rate/:id", deleteGoldRate);
 
-router.post('/create-category', upload.single('image'), createCategory);
+router.post("/create-category", upload.single("image"), createCategory);
 router.get("/getallcategory", getAllCategories);
 router.get("/getbyIdcategory/:id", getCategoryById);
 router.put("/updatecategory/:id", upload.single("image"), updateCategory);
@@ -98,28 +368,52 @@ router.put("/Updatesubcategory/:id", upload.single("image"), updateSubCategory);
 router.delete("/Deletesubcategory/:id", deleteSubCategory);
 router.get("/get-subcategoryby-category/:categoryId", getSubCategoryByCategory);
 
-
-router.post("/Create-sub-subcategory", upload.single("image"), createSubSubCategory);
+router.post(
+  "/Create-sub-subcategory",
+  upload.single("image"),
+  createSubSubCategory,
+);
 router.get("/get-subsubcategory", getAllSubSubCategories);
 router.get("/getById-subsubcategory/:id", getSubSubCategoryById);
-router.put("/Update_subsubcategory/:id", upload.single("image"), updateSubSubCategory);
+router.put(
+  "/Update_subsubcategory/:id",
+  upload.single("image"),
+  updateSubSubCategory,
+);
 router.delete("/subsubcategory/:id", deleteSubSubCategory);
-router.get("/get-subsubcategorybysubcategory/:subCategoryId", getSubSubCategoryBySubCategory);
+router.get(
+  "/get-subsubcategorybysubcategory/:subCategoryId",
+  getSubSubCategoryBySubCategory,
+);
 
-
-router.post("/create-product", upload.fields([{ name: "images", maxCount: 10 }, { name: "certificate", maxCount: 1 }, { name: "video", maxCount: 1 }]), createProduct);
-router.put("/update-product/:id", upload.fields([{ name: "images", maxCount: 10 }, { name: "video", maxCount: 1 }, { name: "certificate", maxCount: 5 }]), updateProduct);
+router.post(
+  "/create-product",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "certificate", maxCount: 1 },
+    { name: "video", maxCount: 1 },
+  ]),
+  createProduct,
+);
+router.put(
+  "/update-product/:id",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "video", maxCount: 1 },
+    { name: "certificate", maxCount: 5 },
+  ]),
+  updateProduct,
+);
 router.get("/getAllProducts", getAllProducts);
-router.get('/getProductsByType/:type', getProductsByType);
+router.get("/getProductsByType/:type", getProductsByType);
 router.get("/products", getAllProductsWithPagination);
 router.get("/get-product/:id", getProductById);
 router.delete("/Deleteproduct/:id", deleteProduct);
 router.get("/getProductsByCategory", getProductsByCategory);
-router.get('/getCategoryIdByProducts/:categoryId', getProductsByCategoryId);
+router.get("/getCategoryIdByProducts/:categoryId", getProductsByCategoryId);
 router.patch("/product/status/:id", changeProductStatus);
 
 router.post("/upload-certificate", upload.single("file"), uploadCertificate);
-
 
 // router.post("/createProduct",upload.array("images", 10),createProduct);
 // router.get("/getAllProducts",getAllProducts);
@@ -129,7 +423,7 @@ router.post("/verify-otp", verifyUserOtp);
 router.post("/resend-otp", resendUserOtp);
 router.post("/refresh-token", refreshUserToken);
 router.post("/logout", verifyToken, logoutUser);
-
+router.post("/send-order-whatsapp", sendOrderWhatsApp);
 
 router.post("/userregister", Userregister);
 router.post("/userlogin", userLogin);
@@ -142,15 +436,11 @@ router.get("/getUsersCount", getUsersCount);
 router.get("/profileSummary/:userId", getProfileSummary);
 router.post("/logout", userLogout);
 
-
-
 router.post("/addcart", addToCart);
 router.get("/getcart/:userId", getCart);
 router.put("/updateCartQuantity/:cartId/item/:itemId", updateCartItem);
 router.delete("/removeCart/:cartId/item/:itemId", removeCartItem);
 router.delete("/clearCart/clear/:userId", clearCart);
-
-
 
 router.post("/wishlist", addToWishlist);
 router.get("/wishlist/:userId", getWishlist);
@@ -164,16 +454,21 @@ router.delete("/Deleteaddress/:id", deleteAddress);
 router.get("/getAllAddress", getAllAddresses);
 router.post("/setDefaultAddress/:id", setDefaultAddress);
 
-
 router.post("/create-coupon", createCoupon);
 router.get("/getall-coupon", getAllCoupons);
 router.get("/getbyid-coupon/:id", getCouponById);
 router.put("/updatecoupon/:id", updateCoupon);
 router.delete("/Deletecoupon/:id", deleteCoupon);
 
-
 // router.post("/create-review",createReview);
-router.post("/create-review", upload.fields([{ name: "images", maxCount: 10 }, { name: "videos", maxCount: 2 }]), createReview);
+router.post(
+  "/create-review",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "videos", maxCount: 2 },
+  ]),
+  createReview,
+);
 
 router.get("/getall-review", getAllReviews);
 router.get("/getbyid-review/:id", getReviewById);
@@ -189,16 +484,12 @@ router.get("/getAllBanners", getAllBanners);
 router.delete("/deleteBanner/:id", deleteBanner);
 router.put("/updateBanner/:id", upload.single("image"), updateBanner);
 
-
-
-
 router.post("/createMetalRate", createMetalRate);
 router.get("/getAllMetalRates", getAllMetalRates);
 router.get("/getMetalRateById/:id", getMetalRateById);
 router.put("/updateMetalRate/:id", updateMetalRate);
 router.delete("/deleteMetalRate/:id", deleteMetalRate);
 router.patch("/toggleMetalRateStatus/:id/status", toggleMetalRateStatus);
-
 
 router.post("/createStoneRate", createStoneRate);
 router.get("/getAllStoneRates", getAllStoneRates);
@@ -207,18 +498,28 @@ router.put("/updateStoneRate/:id", updateStoneRate);
 router.delete("/deleteStoneRate/:id", deleteStoneRate);
 router.patch("/toggleStoneRateStatus/:id/status", toggleStoneRateStatus);
 
-
 router.post("/create-size-chart", upload.single("image"), createSizeChart);
 router.get("/get-all-size-charts", getAllSizeCharts);
-router.get("/get-size-chart-by-sub-category/:subCategoryId", getSizeChartBySubCategory);
+router.get(
+  "/get-size-chart-by-sub-category/:subCategoryId",
+  getSizeChartBySubCategory,
+);
 router.put("/update-size-chart/:id", upload.single("image"), updateSizeChart);
 router.delete("/delete-size-chart/:id", deleteSizeChart);
-
 
 router.post("/createRazorpayOrder", verifyToken, createRazorpayOrder);
 router.post("/verifyRazorpayPayment", verifyToken, verifyRazorpayPayment);
 router.post("/createOrder", createOrder);
+router.post("/pos/create-razorpay-order", verifyToken, createPosRazorpayOrder);
+router.post(
+  "/pos/verify-razorpay-payment",
+  verifyToken,
+  verifyPosRazorpayPayment,
+);
 router.get("/getAllOrders", getAllOrders);
+router.get("/admin/orders/customers", getCustomerOrders);
+router.get("/admin/orders/branch", getAllBranchOrders);
+router.get("/admin/orders/sub-branch", getAllSubBranchOrders);
 router.get("/get-order/:id", getOrderById);
 // router.get("/getOrder/:id", getOrderById);
 router.get("/getOrdersByUser/:userId", getOrdersByUser);
@@ -233,137 +534,83 @@ router.post(
   upload.fields([
     { name: "section1Images", maxCount: 1 },
     { name: "section2Images", maxCount: 1 },
-    { name: "section3Images", maxCount: 1 }
+    { name: "section3Images", maxCount: 1 },
   ]),
-  createAds
+  createAds,
 );
 router.get("/get-all-ads", getAllAds);
 router.get("/get-ads/:id", getAdsById);
-router.put(
-  "/updateSection/:id",
-  upload.single("image"),
-  updateSection
-);
+router.put("/updateSection/:id", upload.single("image"), updateSection);
 router.delete("/delete-ads/:id", deleteAds);
-router.put(
-  "/updateAdsStatus/:id",
-  updateAdsStatus
-);
-
+router.put("/updateAdsStatus/:id", updateAdsStatus);
 
 // CREATE
 
 router.post(
-
   "/create-employee",
 
   upload.fields([
-
     {
-
       name: "photo",
 
-      maxCount: 1
-
+      maxCount: 1,
     },
 
     {
-
       name: "aadhaarImage",
 
-      maxCount: 1
-
-    }
-
+      maxCount: 1,
+    },
   ]),
-  createEmployee
-
+  createEmployee,
 );
 
+router.get("/get-all-employees", getAllEmployees);
 
-router.get(
-  '/get-all-employees',
-  getAllEmployees
-);
+router.get("/get-employeebyid/:id", getEmployeeById);
 
-router.get(
-  '/get-employeebyid/:id',
-  getEmployeeById
-);
-
-router.get(
-  "/branch-employees",
-  verifyToken,
-  getEmployeesByBranch
-);
+router.get("/branch-employees", verifyToken, getEmployeesByBranch);
 
 router.put(
-
   "/update-employee/:id",
 
   upload.fields([
-
     {
-
       name: "photo",
 
-      maxCount: 1
-
+      maxCount: 1,
     },
 
     {
-
       name: "aadhaarImage",
 
-      maxCount: 1
-
-    }
-
+      maxCount: 1,
+    },
   ]),
 
-  updateEmployee
+  updateEmployee,
+);
+router.post("/create-employee", verifyToken, createEmployee);
 
-);
-router.post(
-  "/create-employee",
-  verifyToken,
-  createEmployee
-);
+router.delete("/delete-employee/:id", deleteEmployee);
 
-router.delete(
-  '/delete-employee/:id',
-  deleteEmployee
-);
-
-router.post(
-  "/assign-product",
-  verifyToken,
-  assignProductToSubBranch
-);
-router.get(
-  "/assigned-products",
-  verifyToken,
-  getAssignedProducts
-);
+router.post("/assign-product", verifyToken, assignProductToSubBranch);
+router.get("/assigned-products", verifyToken, getAssignedProducts);
 // router.get("/assigned-products/:subBranchId", getAssignedProducts);
 router.post("/return-product", returnAssignedProduct);
-router.post(
-  "/assign-multiple-products",
-  verifyToken,
-  assignMultipleProducts
-);
+router.post("/assign-multiple-products", verifyToken, assignMultipleProducts);
 router.get(
   "/getassigned-products/:subBranchId",
   verifyToken,
-  getAssignedProductsBySubBranch
+  getAssignedProductsBySubBranch,
 );
 router.get(
   "/my-assigned-products",
   verifyToken,
-  getAssignedProductsBySubBranch
+  getAssignedProductsBySubBranch,
 );
 
-// sceams 
+// sceams
 // Create
 router.post("/create-scheme", createScheme);
 router.get("/get-all-schemes", getAllSchemes);
@@ -380,11 +627,16 @@ router.put("/update-user-scheme/:id", updateUserScheme);
 router.delete("/delete-user-scheme/:id", deleteUserScheme);
 router.get("/get-user-scheme/:userId/:userSchemeId", getUserSchemeById);
 
-
-
-
-router.post("/create-scheme-razorpay-order", verifyToken, createSchemeRazorpayOrder);
-router.post("/verify-scheme-razorpay-payment", verifyToken, verifySchemeRazorpayPayment);
+router.post(
+  "/create-scheme-razorpay-order",
+  verifyToken,
+  createSchemeRazorpayOrder,
+);
+router.post(
+  "/verify-scheme-razorpay-payment",
+  verifyToken,
+  verifySchemeRazorpayPayment,
+);
 router.post("/create-payment", createPayment);
 router.get("/get-all-payments", getAllPayments);
 router.get("/get-payment/:id", getPaymentById);
@@ -392,8 +644,6 @@ router.put("/update-payment/:id", updatePayment);
 router.delete("/delete-payment/:id", deletePayment);
 router.get("/get-user-payments/:userId", getUserPayments);
 router.get("/get-payment-history/:subscriptionId", getPaymentHistory);
-
-
 
 // Supplier Purchase routes
 router.post("/create-supplier", createSupplier);
@@ -404,21 +654,35 @@ router.put("/update-supplier/:id", updateSupplier);
 router.delete("/delete-supplier/:id", deleteSupplier);
 router.put("/update-supplier-status/:id", updateSupplierStatus);
 
-
-
 // Supplier Purchase
-router.post("/create-supplier-purchase", upload.array("documents", 10), createSupplierPurchase);
+router.post(
+  "/create-supplier-purchase",
+  upload.array("documents", 10),
+  createSupplierPurchase,
+);
 router.get("/get-all-supplier-purchases", getAllSupplierPurchases);
 router.get("/get-supplier-purchase/:id", getSupplierPurchaseById);
-router.put("/update-supplier-purchase/:id", upload.array("documents", 10), updateSupplierPurchase);
+router.put(
+  "/update-supplier-purchase/:id",
+  upload.array("documents", 10),
+  updateSupplierPurchase,
+);
 router.get("/get-supplier-purchases/:supplierId", getSupplierPurchases);
-router.post("/add-purchase-document/:id", upload.single("document"), addPurchaseDocument);
-router.delete("/delete-purchase-document/:id/:documentId", deletePurchaseDocument);
+router.post(
+  "/add-purchase-document/:id",
+  upload.single("document"),
+  addPurchaseDocument,
+);
+router.delete(
+  "/delete-purchase-document/:id/:documentId",
+  deletePurchaseDocument,
+);
 router.put("/update-purchase-payment-status/:id", updatePurchasePaymentStatus);
-router.put("/update-supplier-purchase-status/:id", updateSupplierPurchaseStatus);
+router.put(
+  "/update-supplier-purchase-status/:id",
+  updateSupplierPurchaseStatus,
+);
 router.delete("/delete-supplier-purchase/:id", deleteSupplierPurchase);
-
-
 
 // Supplier Purchase Items
 
@@ -429,12 +693,7 @@ router.get("/get-product-purchase-items/:productId", getPurchaseItemsByProduct);
 router.get("/get-variant-purchase-items/:variantId", getPurchaseItemsByVariant);
 router.put("/update-supplier-purchase-item/:id", updateSupplierPurchaseItem);
 router.delete("/delete-supplier-purchase-item/:id", deleteSupplierPurchaseItem);
-router.get(
-  "/get-purchase-items/:id",
-  getSupplierPurchaseItemById
-);
-
-
+router.get("/get-purchase-items/:id", getSupplierPurchaseItemById);
 
 router.post("/create-maker", createMaker);
 router.get("/get-all-makers", getAllMakers);
@@ -444,8 +703,6 @@ router.put("/update-maker/:id", updateMaker);
 router.delete("/delete-maker/:id", deleteMaker);
 router.put("/update-maker-status/:id", updateMakerStatus);
 
-
-
 router.post("/create-maker-production", createMakerProduction);
 router.get("/get-all-maker-productions", getAllMakerProductions);
 router.get("/get-maker-production/:id", getMakerProductionById);
@@ -454,17 +711,20 @@ router.put("/update-maker-production/:id", updateMakerProduction);
 router.put("/update-maker-production-status/:id", updateMakerProductionStatus);
 router.delete("/delete-maker-production/:id", deleteMakerProduction);
 
-
-
 router.post("/create-maker-production-item", createMakerProductionItem);
 router.get("/get-all-maker-production-items", getAllMakerProductionItems);
 router.get("/get-production-items/:productionId", getProductionItems);
-router.get("/get-product-production-items/:productId", getProductProductionItems);
-router.get("/get-variant-production-items/:variantId", getVariantProductionItems);
+router.get(
+  "/get-product-production-items/:productId",
+  getProductProductionItems,
+);
+router.get(
+  "/get-variant-production-items/:variantId",
+  getVariantProductionItems,
+);
 router.get("/get-maker-production-item/:id", getMakerProductionItemById);
 router.put("/update-maker-production-item/:id", updateMakerProductionItem);
 router.delete("/delete-maker-production-item/:id", deleteMakerProductionItem);
-
 
 // =====================================================
 // CREATE BRAND
@@ -474,104 +734,82 @@ router.post("/create-brand", upload.single("logo"), createBrand);
 router.get("/get-all-brands", getAllBrands);
 router.get("/get-active-brands", getActiveBrands);
 router.get("/get-brand/:id", getBrandById);
-router.put(
-  "/update-brand/:id",
-  upload.single("logo"),
-  updateBrand
-); router.delete("/delete-brand/:id", deleteBrand);
-
+router.put("/update-brand/:id", upload.single("logo"), updateBrand);
+router.delete("/delete-brand/:id", deleteBrand);
 
 // ===============================
 // CUSTOMER CUSTOM DESIGN
-// =============================== 
-
+// ===============================
 
 // Create request with multiple images
 router.post(
   "/create",
   verifyToken,
   upload.array("referenceImages", 5),
-  createCustomDesignRequest
+  createCustomDesignRequest,
 );
 
 // Get all requests belonging to logged-in customer
-router.get(
-  "/my-requests",
-  verifyToken,
-  getMyCustomDesignRequests
-);
+router.get("/my-requests", verifyToken, getMyCustomDesignRequests);
 
 // Get one request belonging to logged-in customer
-router.get(
-  "/costomdesigenbyid/:id",
-  verifyToken,
-  getMyCustomDesignRequestById
-);
+router.get("/costomdesigenbyid/:id", verifyToken, getMyCustomDesignRequestById);
 
-
-router.put(
-  "/cancel/:id",
-  verifyToken,
-  cancelMyCustomDesignRequest
-);
+router.put("/cancel/:id", verifyToken, cancelMyCustomDesignRequest);
 // ===============================
 // ADMIN CUSTOM DESIGN
 // ===============================
 
-router.get(
-  "/allcustomdesigen",
-  verifyToken,
-  getAllCustomDesignRequests
-);
+router.get("/allcustomdesigen", verifyToken, getAllCustomDesignRequests);
 
 router.get(
   "/allcustomdesigenById/:id",
   verifyToken,
-  getCustomDesignRequestById
+  getCustomDesignRequestById,
 );
 
-router.put(
-  "/:id/status",
-  verifyToken,
-  updateCustomDesignRequestStatus
-);
+router.put("/:id/status", verifyToken, updateCustomDesignRequestStatus);
 
-router.put(
-  "/:id/notes",
-  verifyToken,
-  updateCustomDesignRequestNotes
-);
-
+router.put("/:id/notes", verifyToken, updateCustomDesignRequestNotes);
 
 router.delete(
   "/custom-design-delet/:id",
   verifyToken,
-  deleteCustomDesignRequest
+  deleteCustomDesignRequest,
 );
-
 
 router.put(
   "/update-custondesigen/:id",
   verifyToken,
   upload.array("referenceImages", 5),
-  updateMyCustomDesignRequest
+  updateMyCustomDesignRequest,
 );
-
 
 // Public: frontend homepage reads SEO settings
 router.get("/get-meta-keyowords-seo", getMetaKeyWord);
-router.put("/update-meta-keyowords-seo", upsertMetaKeyWordsSEO, getMetaKeywordsSEOById);
+router.put(
+  "/update-meta-keyowords-seo",
+  upsertMetaKeyWordsSEO,
+  getMetaKeywordsSEOById,
+);
 router.get("/getMetaKeywordsSEOById/:id", getMetaKeywordsSEOById);
 
 router.get("/verify-pickup", verifyToken, verifyPickupAddress);
 router.post("/check-pincode", checkDeliveryPincode);
 router.put("/orders/:id/shipment-packages", verifyToken, saveShipmentPackages);
 router.post("/orders/:id/book-shipment", verifyToken, bookSequelShipment);
-router.get("/orders/:id/track-shipment", verifyToken, getSequelShipmentTracking);
+router.get(
+  "/orders/:id/track-shipment",
+  verifyToken,
+  getSequelShipmentTracking,
+);
 router.post("/orders/track-shipments/bulk", verifyToken, trackMultipleOrders);
-router.post("/orders/:id/cancel-shipment", verifyToken, cancelSequelShipmentOrder);
+router.post(
+  "/orders/:id/cancel-shipment",
+  verifyToken,
+  cancelSequelShipmentOrder,
+);
 router.post("/orders/:id/download-pod", verifyToken, downloadOrderPOD);
-
 
 router.get("/whatsapp/templates", verifyToken, fetchWhatsAppTemplates);
 

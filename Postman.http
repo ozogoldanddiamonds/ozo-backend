@@ -561,6 +561,11 @@ Content-Type: application/json
 
 
 ###
+GET http://localhost:3001/api/admin/orders/branch
+Content-Type: application/json
+
+
+###
 GET http://localhost:3001/api/get-order/6a9d1187c0d98c8e45720174
 Content-Type: application/json
 
@@ -932,3 +937,33 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZ
 GET http://localhost:3001/api/whatsapp/templates
 Content-Type: application/json
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhZjliNmNjZmJhN2QyZTM1YjZlMzA3NiIsInJvbGUiOiJCUkFOQ0giLCJicmFuY2hJZCI6bnVsbCwiaWF0IjoxNzk1MDA3MTU1LCJleHAiOjE3OTUwOTM1NTV9.sK7nNo7hqHQ2ziT2NCeA43bV6oeITcazo77LlVHFN9o
+
+
+
+
+
+###
+POST http://localhost:3001/api/send-order-whatsapp
+Content-Type: application/json
+
+{
+  "phone": "8978971154",
+  "customerName": "Anil Kumar",
+  "orderId": "OZO123456",
+  "orderDate": "20 November 2026",
+  "orderAmount": "25000", 
+  "paymentStatus": "Paid Successfully",
+ "invoiceUrl": "https://your-actual-domain.com/invoices/OZO123456.pdf"
+}
+
+
+
+###
+GET https://multichannel.insignsms.com/api/v1/whatsapp/report
+Content-Type: application/json
+
+{
+  "username":"ozogold",
+  "password":"ozogold@123",
+  "messageId":"wamid.HBgMOTE4OTc4OTcxMTU0FQIAERgUQ0VCMzE1NDczOTAwMkVGOUMyRkIA"
+}
