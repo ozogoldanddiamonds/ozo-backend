@@ -2,7 +2,10 @@ const User = require("../models/user-login");
 const UserSession = require("../models/user-session");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-
+const {
+  normalizeInternationalPhone,
+  findUserByInternationalPhone,
+} = require("../utils/phoneUtils");
 const sendOtpSms = require("../utils/send-otp-sms");
 const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
 
@@ -162,6 +165,7 @@ const createUserSession = async (user, req) => {
 };
 
 // SEND OTP
+
 exports.sendUserOtp = async (req, res) => {
   let user;
   let isNewDocument = false;
@@ -169,8 +173,6 @@ exports.sendUserOtp = async (req, res) => {
   let previousExpiry;
 
   try {
-    const phone = normalizePhone(req.body.phone);
-
     if (!process.env.OTP_SECRET || !process.env.JWT_SECRET) {
       return res.status(500).json({
         success: false,
@@ -178,8 +180,14 @@ exports.sendUserOtp = async (req, res) => {
       });
     }
 
-    user = await User.findOne({ phone });
+    // 1. Normalize international number
+    const phoneData = normalizeInternationalPhone(req.body.phone);
+    const { phone, countryCode } = phoneData;
 
+    // 2. Find existing user (including old Indian records)
+    user = await findUserByInternationalPhone(phoneData);
+
+    // 3. Resend restriction
     if (user && user.OTPExpires && user.OTP) {
       const previousExpiryTime = new Date(user.OTPExpires).getTime();
 
@@ -198,9 +206,11 @@ exports.sendUserOtp = async (req, res) => {
       }
     }
 
+    // 4. Create new user if not found
     if (!user) {
       user = new User({
         phone,
+        phoneCountryCode: countryCode,
         isVerified: false,
       });
 
@@ -210,14 +220,21 @@ exports.sendUserOtp = async (req, res) => {
     previousOtp = user.OTP;
     previousExpiry = user.OTPExpires;
 
+    // 5. Generate OTP
     const otp = crypto.randomInt(100000, 1000000).toString();
 
+    user.phone = phone;
+    user.phoneCountryCode = countryCode;
+
     user.OTP = hashOtp(otp);
+
     user.OTPExpires = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     await user.save();
 
     try {
+      // 6. Send OTP to international number
+      // sendOtpSms must accept E.164 format
       const smsResult = await sendOtpSms(phone, otp);
 
       return res.status(200).json({
@@ -225,12 +242,14 @@ exports.sendUserOtp = async (req, res) => {
         message: "OTP sent successfully",
         data: {
           phone,
+          countryCode,
           expiresIn: OTP_EXPIRY_MINUTES * 60,
           smsReferenceId: smsResult.referenceId,
           result: smsResult,
         },
       });
     } catch (smsError) {
+      // 7. Rollback OTP if SMS fails
       if (isNewDocument) {
         await User.deleteOne({ _id: user._id });
       } else {
@@ -242,21 +261,29 @@ exports.sendUserOtp = async (req, res) => {
       throw smsError;
     }
   } catch (error) {
-    console.error("Send OTP Error:", error.message);
+    console.error("Send OTP Error:", error);
 
-    return res
-      .status(error.message.includes("valid 10-digit") ? 400 : 500)
-      .json({
-        success: false,
-        message: error.message || "Unable to send OTP",
-      });
+    const statusCode =
+      error.message.includes("valid") ||
+      error.message.includes("Please enter") ||
+      error.message.includes("already associated")
+        ? 400
+        : 500;
+
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "Unable to send OTP",
+    });
   }
 };
 
-// VERIFY OTP AND LOGIN
 exports.verifyUserOtp = async (req, res) => {
   try {
-    const phone = normalizePhone(req.body.phone);
+    // 1. Normalize international phone
+    const phoneData = normalizeInternationalPhone(req.body.phone);
+
+    const { phone } = phoneData;
+
     const otp = String(req.body.otp || "").trim();
 
     if (!/^\d{6}$/.test(otp)) {
@@ -273,7 +300,8 @@ exports.verifyUserOtp = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ phone });
+    // 2. Find user
+    const user = await findUserByInternationalPhone(phoneData);
 
     if (!user || !user.OTP || !user.OTPExpires) {
       return res.status(400).json({
@@ -282,9 +310,11 @@ exports.verifyUserOtp = async (req, res) => {
       });
     }
 
+    // 3. Check OTP expiry
     if (new Date(user.OTPExpires).getTime() < Date.now()) {
       user.OTP = undefined;
       user.OTPExpires = undefined;
+
       await user.save();
 
       return res.status(400).json({
@@ -293,6 +323,7 @@ exports.verifyUserOtp = async (req, res) => {
       });
     }
 
+    // 4. Compare OTP
     if (!compareOtp(user.OTP, otp)) {
       return res.status(400).json({
         success: false,
@@ -300,6 +331,7 @@ exports.verifyUserOtp = async (req, res) => {
       });
     }
 
+    // 5. Verify user
     const isNewUser = !user.isVerified;
 
     user.isVerified = true;
@@ -308,23 +340,24 @@ exports.verifyUserOtp = async (req, res) => {
 
     await user.save();
 
-    // Each login creates an independent device session
+    // 6. Create independent device session
     const sessionData = await createUserSession(user, req);
 
     const isWeb = sessionData.platform === "web";
 
     if (isWeb) {
-      // Browser receives refresh token only as HttpOnly cookie
       setRefreshCookie(res, sessionData.refreshToken);
     }
 
+    // 7. Return response
     return res.status(200).json({
       success: true,
       message: "Login successful",
       isNewUser,
+
       accessToken: sessionData.accessToken,
 
-      // Never send web refresh token in JSON
+      // Web refresh token remains HttpOnly cookie
       ...(isWeb
         ? {}
         : {
@@ -334,19 +367,211 @@ exports.verifyUserOtp = async (req, res) => {
       sessionId: sessionData.sessionId,
       deviceId: sessionData.deviceId,
       expiresIn: ACCESS_TOKEN_SECONDS,
+
       user: safeUser(user),
     });
   } catch (error) {
-    console.error("Verify OTP Error:", error.message);
+    console.error("Verify OTP Error:", error);
 
-    return res
-      .status(error.message.includes("valid 10-digit") ? 400 : 500)
-      .json({
-        success: false,
-        message: error.message || "OTP verification failed",
-      });
+    const statusCode =
+      error.message.includes("valid") ||
+      error.message.includes("Please enter") ||
+      error.message.includes("already associated")
+        ? 400
+        : 500;
+
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "OTP verification failed",
+    });
   }
 };
+
+// exports.sendUserOtp = async (req, res) => {
+//   let user;
+//   let isNewDocument = false;
+//   let previousOtp;
+//   let previousExpiry;
+
+//   try {
+//     const phone = normalizePhone(req.body.phone);
+
+//     if (!process.env.OTP_SECRET || !process.env.JWT_SECRET) {
+//       return res.status(500).json({
+//         success: false,
+//         message: "Authentication environment variables are missing",
+//       });
+//     }
+
+//     user = await User.findOne({ phone });
+
+//     if (user && user.OTPExpires && user.OTP) {
+//       const previousExpiryTime = new Date(user.OTPExpires).getTime();
+
+//       const previousSentTime =
+//         previousExpiryTime - OTP_EXPIRY_MINUTES * 60 * 1000;
+
+//       const elapsedSeconds = (Date.now() - previousSentTime) / 1000;
+
+//       if (elapsedSeconds >= 0 && elapsedSeconds < OTP_RESEND_SECONDS) {
+//         return res.status(429).json({
+//           success: false,
+//           message: `Please wait ${Math.ceil(
+//             OTP_RESEND_SECONDS - elapsedSeconds,
+//           )} seconds before requesting another OTP`,
+//         });
+//       }
+//     }
+
+//     if (!user) {
+//       user = new User({
+//         phone,
+//         isVerified: false,
+//       });
+
+//       isNewDocument = true;
+//     }
+
+//     previousOtp = user.OTP;
+//     previousExpiry = user.OTPExpires;
+
+//     const otp = crypto.randomInt(100000, 1000000).toString();
+
+//     user.OTP = hashOtp(otp);
+//     user.OTPExpires = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+//     await user.save();
+
+//     try {
+//       const smsResult = await sendOtpSms(phone, otp);
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "OTP sent successfully",
+//         data: {
+//           phone,
+//           expiresIn: OTP_EXPIRY_MINUTES * 60,
+//           smsReferenceId: smsResult.referenceId,
+//           result: smsResult,
+//         },
+//       });
+//     } catch (smsError) {
+//       if (isNewDocument) {
+//         await User.deleteOne({ _id: user._id });
+//       } else {
+//         user.OTP = previousOtp;
+//         user.OTPExpires = previousExpiry;
+//         await user.save();
+//       }
+
+//       throw smsError;
+//     }
+//   } catch (error) {
+//     console.error("Send OTP Error:", error.message);
+
+//     return res
+//       .status(error.message.includes("valid 10-digit") ? 400 : 500)
+//       .json({
+//         success: false,
+//         message: error.message || "Unable to send OTP",
+//       });
+//   }
+// };
+
+// VERIFY OTP AND LOGIN
+// exports.verifyUserOtp = async (req, res) => {
+//   try {
+//     const phone = normalizePhone(req.body.phone);
+//     const otp = String(req.body.otp || "").trim();
+
+//     if (!/^\d{6}$/.test(otp)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Enter a valid 6-digit OTP",
+//       });
+//     }
+
+//     if (!process.env.OTP_SECRET || !process.env.JWT_SECRET) {
+//       return res.status(500).json({
+//         success: false,
+//         message: "Authentication environment variables are missing",
+//       });
+//     }
+
+//     const user = await User.findOne({ phone });
+
+//     if (!user || !user.OTP || !user.OTPExpires) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "OTP not found. Please request a new OTP",
+//       });
+//     }
+
+//     if (new Date(user.OTPExpires).getTime() < Date.now()) {
+//       user.OTP = undefined;
+//       user.OTPExpires = undefined;
+//       await user.save();
+
+//       return res.status(400).json({
+//         success: false,
+//         message: "OTP expired. Please request a new OTP",
+//       });
+//     }
+
+//     if (!compareOtp(user.OTP, otp)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Invalid OTP",
+//       });
+//     }
+
+//     const isNewUser = !user.isVerified;
+
+//     user.isVerified = true;
+//     user.OTP = undefined;
+//     user.OTPExpires = undefined;
+
+//     await user.save();
+
+//     // Each login creates an independent device session
+//     const sessionData = await createUserSession(user, req);
+
+//     const isWeb = sessionData.platform === "web";
+
+//     if (isWeb) {
+//       // Browser receives refresh token only as HttpOnly cookie
+//       setRefreshCookie(res, sessionData.refreshToken);
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Login successful",
+//       isNewUser,
+//       accessToken: sessionData.accessToken,
+
+//       // Never send web refresh token in JSON
+//       ...(isWeb
+//         ? {}
+//         : {
+//             refreshToken: sessionData.refreshToken,
+//           }),
+
+//       sessionId: sessionData.sessionId,
+//       deviceId: sessionData.deviceId,
+//       expiresIn: ACCESS_TOKEN_SECONDS,
+//       user: safeUser(user),
+//     });
+//   } catch (error) {
+//     console.error("Verify OTP Error:", error.message);
+
+//     return res
+//       .status(error.message.includes("valid 10-digit") ? 400 : 500)
+//       .json({
+//         success: false,
+//         message: error.message || "OTP verification failed",
+//       });
+//   }
+// };
 
 // RESEND OTP
 exports.resendUserOtp = async (req, res) => {

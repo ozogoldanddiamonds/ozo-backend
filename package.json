@@ -23,6 +23,7 @@
     "form-data": "^4.0.6",
     "google-auth-library": "^10.9.1",
     "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "^1.13.17",
     "mongoose": "^8.24.8",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",

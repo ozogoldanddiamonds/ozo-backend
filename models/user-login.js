@@ -3,6 +3,12 @@ const mongoose = require("mongoose");
 const UserSchema = new mongoose.Schema({
   name: { type: String, trim: true },
   phone: { type: String, trim: true },
+  phoneCountryCode: {
+    type: String,
+    trim: true,
+    default: "+91",
+  },
+
   email: { type: String, trim: true, lowercase: true },
   password: { type: String },
   googleId: { type: String },
