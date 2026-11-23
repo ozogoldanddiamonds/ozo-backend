@@ -967,3 +967,9 @@ Content-Type: application/json
   "password":"ozogold@123",
   "messageId":"wamid.HBgMOTE4OTc4OTcxMTU0FQIAERgUQ0VCMzE1NDczOTAwMkVGOUMyRkIA"
 }
+
+
+###
+GET https://multichannel.buddyinfotech.in/api/v1/sms/templates/24360
+Content-Type: application/json
+Authorization: Bearer 387|K5Jt9hZG27EqL7JWY0JLnbHtP7yoabGX8oLN9e9r064c1cfc

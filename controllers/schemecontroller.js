@@ -1,14 +1,11 @@
-const Scheme = require("../models/Scheme");
+const Scheme = require("../models/scheme");
 
 // =======================
 // Create Scheme
 // =======================
 exports.createScheme = async (req, res) => {
-
   try {
-
     let {
-
       name,
 
       amount,
@@ -27,8 +24,7 @@ exports.createScheme = async (req, res) => {
 
       isPopular,
 
-      displayOrder
-
+      displayOrder,
     } = req.body;
 
     // =======================
@@ -36,39 +32,27 @@ exports.createScheme = async (req, res) => {
     // =======================
 
     if (!name || !name.trim()) {
-
       return res.status(400).json({
-
         success: false,
 
-        message: "Scheme name is required"
-
+        message: "Scheme name is required",
       });
-
     }
 
     if (!amount || Number(amount) <= 0) {
-
       return res.status(400).json({
-
         success: false,
 
-        message: "Valid scheme amount is required"
-
+        message: "Valid scheme amount is required",
       });
-
     }
 
     if (!description || !description.trim()) {
-
       return res.status(400).json({
-
         success: false,
 
-        message: "Description is required"
-
+        message: "Description is required",
       });
-
     }
 
     amount = Number(amount);
@@ -80,20 +64,13 @@ exports.createScheme = async (req, res) => {
     // MONTH VALIDATION
     // =======================
 
-    if (
-      userPayMonths + companyPayMonths !==
-      durationMonths
-    ) {
-
+    if (userPayMonths + companyPayMonths !== durationMonths) {
       return res.status(400).json({
-
         success: false,
 
         message:
-          "User Pay Months + Company Pay Months must be equal to Duration Months"
-
+          "User Pay Months + Company Pay Months must be equal to Duration Months",
       });
-
     }
 
     // =======================
@@ -101,31 +78,21 @@ exports.createScheme = async (req, res) => {
     // =======================
 
     const existingScheme = await Scheme.findOne({
-
       name: {
-
         $regex: new RegExp(
-
           `^${name.trim()}$`,
 
-          "i"
-
-        )
-
-      }
-
+          "i",
+        ),
+      },
     });
 
     if (existingScheme) {
-
       return res.status(400).json({
-
         success: false,
 
-        message: "Scheme already exists"
-
+        message: "Scheme already exists",
       });
-
     }
 
     // =======================
@@ -135,18 +102,13 @@ exports.createScheme = async (req, res) => {
     // Monthly installment = Amount / Total Duration
     // =======================
 
-    const monthlyAmount = Number(
-
-      (amount / durationMonths).toFixed(2)
-
-    );
+    const monthlyAmount = Number((amount / durationMonths).toFixed(2));
 
     // =======================
     // CREATE SCHEME
     // =======================
 
     const scheme = await Scheme.create({
-
       name: name.trim(),
 
       amount,
@@ -167,8 +129,7 @@ exports.createScheme = async (req, res) => {
 
       isPopular: isPopular || false,
 
-      displayOrder: displayOrder || 0
-
+      displayOrder: displayOrder || 0,
     });
 
     // =======================
@@ -176,111 +137,85 @@ exports.createScheme = async (req, res) => {
     // =======================
 
     res.status(201).json({
-
       success: true,
 
       message: "Scheme created successfully",
 
-      data: scheme
-
+      data: scheme,
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     console.log(error);
 
     res.status(500).json({
-
       success: false,
 
-      message: error.message
-
+      message: error.message,
     });
-
   }
-
 };
-
 
 // =======================
 // Get All Schemes
 // =======================
 exports.getAllSchemes = async (req, res) => {
   try {
-
     const schemes = await Scheme.find().sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
       count: schemes.length,
-      data: schemes
+      data: schemes,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
-
-
 
 // =======================
 // Get Scheme By Id
 // =======================
 exports.getSchemeById = async (req, res) => {
   try {
-
     const scheme = await Scheme.findById(req.params.id);
 
     if (!scheme) {
       return res.status(404).json({
         success: false,
-        message: "Scheme not found"
+        message: "Scheme not found",
       });
     }
 
     res.status(200).json({
       success: true,
-      data: scheme
+      data: scheme,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
-
-
 
 // =======================
 // Update Scheme
 // =======================
 exports.updateScheme = async (req, res) => {
-
   try {
-
     const scheme = await Scheme.findById(req.params.id);
 
     if (!scheme) {
-
       return res.status(404).json({
-
         success: false,
 
-        message: "Scheme not found"
-
+        message: "Scheme not found",
       });
-
     }
 
     let {
-
       name,
 
       amount,
@@ -301,53 +236,32 @@ exports.updateScheme = async (req, res) => {
 
       displayOrder,
 
-      isActive
-
+      isActive,
     } = req.body;
 
     // =======================
     // DEFAULT VALUES
     // =======================
 
-    amount = Number(
-      amount ?? scheme.amount
-    );
+    amount = Number(amount ?? scheme.amount);
 
-    durationMonths = Number(
-      durationMonths ?? scheme.durationMonths
-    );
+    durationMonths = Number(durationMonths ?? scheme.durationMonths);
 
-    userPayMonths = Number(
-      userPayMonths ?? scheme.userPayMonths
-    );
+    userPayMonths = Number(userPayMonths ?? scheme.userPayMonths);
 
-    companyPayMonths = Number(
-      companyPayMonths ?? scheme.companyPayMonths
-    );
+    companyPayMonths = Number(companyPayMonths ?? scheme.companyPayMonths);
 
     // =======================
     // VALIDATION
     // =======================
 
-    if (
-
-      userPayMonths +
-
-      companyPayMonths !==
-
-      durationMonths
-
-    ) {
-
+    if (userPayMonths + companyPayMonths !== durationMonths) {
       return res.status(400).json({
-
         success: false,
 
         message:
-          "User Pay Months + Company Pay Months must equal Duration Months"
-
+          "User Pay Months + Company Pay Months must equal Duration Months",
       });
-
     }
 
     // =======================
@@ -355,101 +269,63 @@ exports.updateScheme = async (req, res) => {
     // =======================
 
     if (name) {
-
       const duplicate = await Scheme.findOne({
-
         _id: {
-          $ne: req.params.id
+          $ne: req.params.id,
         },
 
         name: {
-
           $regex: new RegExp(
-
             `^${name.trim()}$`,
 
-            "i"
-
-          )
-
-        }
-
+            "i",
+          ),
+        },
       });
 
       if (duplicate) {
-
         return res.status(400).json({
-
           success: false,
 
-          message:
-            "Scheme name already exists"
-
+          message: "Scheme name already exists",
         });
-
       }
-
     }
 
     // =======================
     // MONTHLY AMOUNT
     // =======================
 
-    const monthlyAmount = Number(
-
-      (amount / durationMonths).toFixed(2)
-
-    );
+    const monthlyAmount = Number((amount / durationMonths).toFixed(2));
 
     // =======================
     // UPDATE
     // =======================
 
-    scheme.name =
-      name?.trim() || scheme.name;
+    scheme.name = name?.trim() || scheme.name;
 
-    scheme.amount =
-      amount;
+    scheme.amount = amount;
 
-    scheme.durationMonths =
-      durationMonths;
+    scheme.durationMonths = durationMonths;
 
-    scheme.userPayMonths =
-      userPayMonths;
+    scheme.userPayMonths = userPayMonths;
 
-    scheme.companyPayMonths =
-      companyPayMonths;
+    scheme.companyPayMonths = companyPayMonths;
 
-    scheme.monthlyAmount =
-      monthlyAmount;
+    scheme.monthlyAmount = monthlyAmount;
 
-    scheme.description =
-      description?.trim() ||
-      scheme.description;
+    scheme.description = description?.trim() || scheme.description;
 
-    scheme.benefits =
-      benefits ??
-      scheme.benefits;
+    scheme.benefits = benefits ?? scheme.benefits;
 
-    scheme.terms =
-      terms ??
-      scheme.terms;
+    scheme.terms = terms ?? scheme.terms;
 
-    scheme.isPopular =
-      isPopular ??
-      scheme.isPopular;
+    scheme.isPopular = isPopular ?? scheme.isPopular;
 
-    scheme.displayOrder =
-      displayOrder ??
-      scheme.displayOrder;
+    scheme.displayOrder = displayOrder ?? scheme.displayOrder;
 
-    if (
-      typeof isActive === "boolean"
-    ) {
-
-      scheme.isActive =
-        isActive;
-
+    if (typeof isActive === "boolean") {
+      scheme.isActive = isActive;
     }
 
     await scheme.save();
@@ -459,34 +335,21 @@ exports.updateScheme = async (req, res) => {
     // =======================
 
     res.status(200).json({
-
       success: true,
 
-      message:
-        "Scheme updated successfully",
+      message: "Scheme updated successfully",
 
-      data:
-        scheme
-
+      data: scheme,
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     console.log(error);
 
     res.status(500).json({
-
       success: false,
 
-      message:
-        error.message
-
+      message: error.message,
     });
-
   }
-
 };
 
 // =======================
@@ -494,13 +357,12 @@ exports.updateScheme = async (req, res) => {
 // =======================
 exports.deleteScheme = async (req, res) => {
   try {
-
     const scheme = await Scheme.findById(req.params.id);
 
     if (!scheme) {
       return res.status(404).json({
         success: false,
-        message: "Scheme not found"
+        message: "Scheme not found",
       });
     }
 
@@ -508,25 +370,21 @@ exports.deleteScheme = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Scheme deleted successfully"
+      message: "Scheme deleted successfully",
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
-
-
 
 // =======================
 // Update Status (Active/Inactive)
 // =======================
 exports.updateSchemeStatus = async (req, res) => {
   try {
-
     const { isActive } = req.body;
 
     const scheme = await Scheme.findById(req.params.id);
@@ -534,7 +392,7 @@ exports.updateSchemeStatus = async (req, res) => {
     if (!scheme) {
       return res.status(404).json({
         success: false,
-        message: "Scheme not found"
+        message: "Scheme not found",
       });
     }
 
@@ -545,13 +403,12 @@ exports.updateSchemeStatus = async (req, res) => {
     res.status(200).json({
       success: true,
       message: `Scheme ${isActive ? "Activated" : "Deactivated"} successfully`,
-      data: scheme
+      data: scheme,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };

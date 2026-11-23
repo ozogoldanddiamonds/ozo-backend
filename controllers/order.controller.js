@@ -13,6 +13,7 @@ const MakerProductionItem = require("../models/maker-production-item");
 const generateOrderInvoice = require("../utils/generate-order-invoice");
 const uploadInvoicePdf = require("../middleware/upload-invoice-pdf");
 const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
+const sendOrderSuccessSms = require("../utils/send-order-success-sms");
 const calculateVariantPrice = require("../utils/price-calculator");
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -980,12 +981,6 @@ exports.createOrder = async (req, res) => {
       // ==========================================
       // STOCK VALIDATION AND DEDUCTION
       // ==========================================
-      // Only Product.variants[].stock is actual inventory.
-      // SupplierPurchaseItem and MakerProductionItem
-      // must NOT be modified.
-      //
-      // This runs only when createOrder is called.
-      // The update is inside the same transaction as order.save().
 
       const stockUpdate = await Product.updateOne(
         {
@@ -1293,58 +1288,80 @@ exports.createOrder = async (req, res) => {
 
     // ==========================================
     // 16. COMMIT TRANSACTION
+    // =
+    // ==========================================
+    // 16. COMMIT TRANSACTION
     // ==========================================
 
     await session.commitTransaction();
 
+    console.log("========== ORDER CREATED ==========");
+    console.log("Order Number:", order.orderNumber);
+    console.log("Payment Status:", order.paymentStatus);
+
+    // Transaction completed.
+    // Notification failures must NOT rollback the order.
     order.$session(null);
 
+    // Notification result variables
+    let orderSmsSent = false;
+    let orderSmsError = null;
+
+    let whatsappSent = false;
+    let whatsappError = null;
+
+    const customerPhone =
+      order.customerDetails?.phone || order.addressSnapshot?.phone || "";
+
+    const customerName =
+      order.customerDetails?.name || order.addressSnapshot?.fullName;
+
     // ==========================================
-    // 17. INVOICE AND WHATSAPP
+    // 17. GENERATE AND UPLOAD INVOICE PDF
     // ==========================================
 
+    let invoiceReady = false;
+
     try {
+      console.log(
+        "========== INVOICE GENERATION STARTED ==========",
+        order.invoiceNumber,
+      );
+
       const invoiceBuffer = await generateOrderInvoice(order);
+
+      if (!invoiceBuffer) {
+        throw new Error("Invoice PDF generation failed");
+      }
 
       const uploadedInvoice = await uploadInvoicePdf(
         invoiceBuffer,
         order.invoiceNumber,
       );
 
+      if (!uploadedInvoice?.url) {
+        throw new Error("Invoice PDF upload failed");
+      }
+
+      // Save invoice URL
       order.invoicePdfUrl = uploadedInvoice.url;
       order.invoiceGeneratedAt = new Date();
+
       order.whatsappInvoiceStatus = "PENDING";
       order.whatsappInvoiceError = null;
 
       await order.save();
 
-      const customerPhone =
-        order.customerDetails?.phone || order.addressSnapshot?.phone;
+      invoiceReady = true;
 
-      if (!customerPhone) {
-        throw new Error("Customer WhatsApp number not found");
-      }
-
-      const whatsappResult = await sendOrderWhatsApp({
-        phone: customerPhone,
-        customerName: order.customerDetails?.name || "Customer",
-        orderId: order.orderNumber,
-        orderDate: formatDate(order.createdAt),
-        orderAmount: order.totalAmount.toFixed(2),
-        paymentStatus: order.paymentStatus,
-        invoiceUrl: uploadedInvoice.url,
-      });
-
-      order.whatsappInvoiceStatus = "ACCEPTED";
-      order.whatsappMessageId = whatsappResult.messageId;
-      order.whatsappInvoiceError = null;
-
-      await order.save();
+      console.log("========== INVOICE UPLOADED ==========");
+      console.log("Invoice Number:", order.invoiceNumber);
+      console.log("Invoice URL:", order.invoicePdfUrl);
     } catch (invoiceError) {
-      console.error(
-        "Invoice / WhatsApp Processing Error:",
-        invoiceError.message,
-      );
+      console.error("INVOICE GENERATION FAILED:", {
+        orderNumber: order.orderNumber,
+        message: invoiceError.message,
+      });
 
       order.whatsappInvoiceStatus = "FAILED";
       order.whatsappInvoiceError = invoiceError.message;
@@ -1352,17 +1369,193 @@ exports.createOrder = async (req, res) => {
       try {
         await order.save();
       } catch (saveError) {
-        console.error(saveError.message);
+        console.error("INVOICE STATUS SAVE ERROR:", saveError.message);
       }
     }
 
     // ==========================================
-    // 18. SUCCESS RESPONSE
+    // 18. SEND ORDER SUCCESS SMS
+    // ==========================================
+
+    if (invoiceReady) {
+      try {
+        console.log("========== ORDER SMS STARTED ==========");
+
+        if (!customerPhone) {
+          throw new Error("Customer SMS number not found");
+        }
+
+        // Prepare product details from Order Schema
+        const productDetails = order.items
+          .map((item, index) => {
+            const productName = item.productSnapshot?.name || "Product";
+
+            const quantity = Number(item.quantity) || 0;
+
+            const unitPrice = Number(item.unitPrice) || 0;
+
+            const totalPrice = Number(item.totalPrice) || 0;
+
+            return (
+              `${index + 1}. ${productName}` +
+              ` - Qty: ${quantity}` +
+              ` - Unit Price: Rs.${unitPrice.toFixed(2)}` +
+              ` - Total: Rs.${totalPrice.toFixed(2)}`
+            );
+          })
+          .join("; ");
+
+        // Buddy SMS service
+        const smsResult = await sendOrderSuccessSms({
+          phone: customerPhone,
+          customerName,
+          orderNumber: order.orderNumber,
+          orderDate: formatDate(order.createdAt),
+          productDetails,
+          totalAmount: order.totalAmount,
+          paymentMode: order.paymentMethod,
+          paymentStatus: order.paymentStatus,
+          orderStatus: order.orderStatus,
+          invoiceUrl: order.invoicePdfUrl,
+        });
+
+        if (smsResult?.success !== true) {
+          throw new Error(
+            smsResult?.message || "Buddy SMS gateway rejected the request",
+          );
+        }
+
+        orderSmsSent = true;
+
+        console.log("========== ORDER SMS ACCEPTED ==========");
+        console.log({
+          orderNumber: order.orderNumber,
+          phone: customerPhone,
+          referenceId: smsResult.reference_id || null,
+          response: smsResult,
+        });
+      } catch (smsError) {
+        orderSmsError =
+          smsError.response?.data?.message ||
+          smsError.message ||
+          "Order success SMS failed";
+
+        console.error("========== ORDER SMS FAILED ==========", {
+          orderNumber: order.orderNumber,
+          phone: customerPhone,
+          message: orderSmsError,
+          response: smsError.response?.data || null,
+        });
+      }
+    } else {
+      orderSmsError =
+        "SMS not sent because invoice PDF generation or upload failed";
+
+      console.log("ORDER SMS SKIPPED:", orderSmsError);
+    }
+
+    // ==========================================
+    // 19. SEND WHATSAPP WITH PDF ATTACHMENT
+    // ==========================================
+
+    if (invoiceReady) {
+      try {
+        console.log("========== WHATSAPP STARTED ==========");
+
+        if (!customerPhone) {
+          throw new Error("Customer WhatsApp number not found");
+        }
+
+        const whatsappResult = await sendOrderWhatsApp({
+          phone: customerPhone,
+
+          customerName,
+
+          orderId: order.orderNumber,
+
+          orderDate: formatDate(order.createdAt),
+
+          orderAmount: Number(order.totalAmount || 0).toFixed(2),
+
+          paymentStatus: order.paymentStatus,
+
+          invoiceUrl: order.invoicePdfUrl,
+        });
+
+        if (!whatsappResult?.success || !whatsappResult?.messageId) {
+          throw new Error(
+            whatsappResult?.message ||
+              "WhatsApp gateway did not confirm message acceptance",
+          );
+        }
+
+        order.whatsappInvoiceStatus = "ACCEPTED";
+
+        order.whatsappMessageId = whatsappResult.messageId;
+
+        order.whatsappInvoiceError = null;
+
+        await order.save();
+
+        whatsappSent = true;
+
+        console.log("========== WHATSAPP ACCEPTED ==========");
+
+        console.log({
+          orderNumber: order.orderNumber,
+          messageId: order.whatsappMessageId,
+        });
+      } catch (whatsappError) {
+        whatsappError =
+          whatsappError.response?.data?.error?.message ||
+          whatsappError.response?.data?.message ||
+          whatsappError.message ||
+          "WhatsApp invoice sending failed";
+
+        console.error("========== WHATSAPP FAILED ==========", {
+          orderNumber: order.orderNumber,
+          message: whatsappError,
+        });
+
+        order.whatsappInvoiceStatus = "FAILED";
+        order.whatsappInvoiceError = whatsappError;
+
+        try {
+          await order.save();
+        } catch (saveError) {
+          console.error("WHATSAPP STATUS SAVE FAILED:", saveError.message);
+        }
+      }
+    } else {
+      whatsappError = "WhatsApp not sent because invoice PDF is unavailable";
+
+      console.log("WHATSAPP SKIPPED:", whatsappError);
+    }
+
+    // ==========================================
+    // 20. SUCCESS RESPONSE
     // ==========================================
 
     return res.status(201).json({
       success: true,
+
       message: "Order created successfully",
+
+      notifications: {
+        invoiceGenerated: invoiceReady,
+        invoiceUrl: order.invoicePdfUrl || null,
+
+        smsSent: orderSmsSent,
+        smsMessage: orderSmsSent
+          ? "Order success SMS accepted by gateway"
+          : orderSmsError,
+
+        whatsappSent,
+        whatsappMessage: whatsappSent
+          ? "Order invoice WhatsApp accepted by gateway"
+          : whatsappError,
+      },
+
       data: order,
     });
   } catch (error) {
@@ -1391,7 +1584,6 @@ exports.createOrder = async (req, res) => {
     }
   }
 };
-
 // exports.verifyRazorpayPayment = async (req, res) => {
 //     console.time("VERIFY_PAYMENT_TOTAL");
 //     try {

@@ -1,147 +1,179 @@
+const mongoose = require("mongoose");
 const UserScheme = require("../models/user-schema");
 const Scheme = require("../models/scheme");
+const User = require("../models/user-login");
+const sendSchemeEnrollmentSms = require("../utils/send-scheme-enrollment-sms");
 
 // ============================
 // Create User Scheme
 // ============================
 
 exports.createUserScheme = async (req, res) => {
+  try {
+    const { user, scheme } = req.body;
+
+    // ==========================
+    // VALIDATION
+    // ==========================
+
+    if (!user || !scheme) {
+      return res.status(400).json({
+        success: false,
+        message: "User and Scheme are required",
+      });
+    }
+
+    if (
+      !mongoose.Types.ObjectId.isValid(user) ||
+      !mongoose.Types.ObjectId.isValid(scheme)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid User or Scheme ID",
+      });
+    }
+
+    // ==========================
+    // GET USER
+    // ==========================
+
+    const userData = await User.findById(user).select(
+      "name phone phoneCountryCode",
+    );
+
+    if (!userData) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    if (!userData.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer mobile number not found",
+      });
+    }
+
+    // ==========================
+    // GET SCHEME
+    // ==========================
+
+    const schemeData = await Scheme.findById(scheme);
+
+    if (!schemeData) {
+      return res.status(404).json({
+        success: false,
+        message: "Scheme not found",
+      });
+    }
+
+    if (!schemeData.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Scheme is inactive",
+      });
+    }
+
+    // ==========================
+    // DATES
+    // ==========================
+
+    const startDate = new Date();
+
+    const nextDueDate = new Date(startDate);
+    nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+
+    const maturityDate = new Date(startDate);
+    maturityDate.setMonth(maturityDate.getMonth() + schemeData.durationMonths);
+
+    // ==========================
+    // CREATE USER SCHEME
+    // ==========================
+
+    const userScheme = await UserScheme.create({
+      user,
+      scheme,
+
+      schemeName: schemeData.name,
+      schemeAmount: schemeData.amount,
+      monthlyAmount: schemeData.monthlyAmount,
+      durationMonths: schemeData.durationMonths,
+
+      userPayMonths: schemeData.userPayMonths,
+      companyPayMonths: schemeData.companyPayMonths,
+
+      startDate,
+      nextDueDate,
+      maturityDate,
+
+      totalInstallments: schemeData.userPayMonths,
+      paidInstallments: 0,
+      remainingInstallments: schemeData.userPayMonths,
+
+      totalPaidAmount: 0,
+      companyContribution: 0,
+
+      remarks: "",
+      status: "ACTIVE",
+    });
+
+    // ==========================
+    // SEND ENROLLMENT SMS
+    // ==========================
+
+    let smsSent = false;
+    let smsResponse = null;
+    let smsError = null;
 
     try {
+      smsResponse = await sendSchemeEnrollmentSms({
+        phone: userData.phone,
+        customerName: userData.name || "Customer",
 
-        const { user, scheme } = req.body;
+        schemeName: schemeData.name,
 
-        // ==========================
-        // VALIDATION
-        // ==========================
+        totalAmount: schemeData.amount,
+        monthlyAmount: schemeData.monthlyAmount,
 
-        if (!user || !scheme) {
-            return res.status(400).json({
-                success: false,
-                message: "User and Scheme are required"
-            });
-        }
+        durationMonths: schemeData.durationMonths,
+        userPayMonths: schemeData.userPayMonths,
+        companyPayMonths: schemeData.companyPayMonths,
+      });
 
-        if (
-            !require("mongoose").Types.ObjectId.isValid(user) ||
-            !require("mongoose").Types.ObjectId.isValid(scheme)
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid User or Scheme ID"
-            });
-        }
+      smsSent = true;
+    } catch (error) {
+      smsError = error.message;
 
-        // ==========================
-        // GET SCHEME
-        // ==========================
-
-        const schemeData = await Scheme.findById(scheme);
-
-        if (!schemeData) {
-            return res.status(404).json({
-                success: false,
-                message: "Scheme not found"
-            });
-        }
-
-        if (!schemeData.isActive) {
-            return res.status(400).json({
-                success: false,
-                message: "Scheme is inactive"
-            });
-        }
-
-        // ==========================
-        // DATES
-        // ==========================
-
-        const startDate = new Date();
-
-        const nextDueDate = new Date(startDate);
-        nextDueDate.setMonth(nextDueDate.getMonth() + 1);
-
-        const maturityDate = new Date(startDate);
-        maturityDate.setMonth(
-            maturityDate.getMonth() + schemeData.durationMonths
-        );
-
-        // ==========================
-        // CREATE USER SCHEME
-        // Multiple subscriptions allowed
-        // ==========================
-
-        const userScheme = await UserScheme.create({
-
-            user,
-
-            scheme,
-
-            schemeName: schemeData.name,
-
-            schemeAmount: schemeData.amount,
-
-            monthlyAmount: schemeData.monthlyAmount,
-
-            durationMonths: schemeData.durationMonths,
-
-            userPayMonths: schemeData.userPayMonths,
-
-            companyPayMonths: schemeData.companyPayMonths,
-
-            startDate,
-
-            nextDueDate,
-
-            maturityDate,
-
-            totalInstallments: schemeData.userPayMonths,
-
-            paidInstallments: 0,
-
-            remainingInstallments: schemeData.userPayMonths,
-
-            totalPaidAmount: 0,
-
-            companyContribution: 0,
-
-            remarks: "",
-
-            status: "ACTIVE"
-
-        });
-
-        // ==========================
-        // RESPONSE
-        // ==========================
-
-        return res.status(201).json({
-
-            success: true,
-
-            message: "Scheme subscribed successfully",
-
-            data: userScheme
-
-        });
-
-    }
-    catch (error) {
-
-        console.log("Create User Scheme Error:", error);
-
-        return res.status(500).json({
-
-            success: false,
-
-            message: error.message
-
-        });
-
+      console.error("Scheme created but enrollment SMS failed:", error.message);
     }
 
+    // ==========================
+    // RESPONSE
+    // ==========================
+
+    return res.status(201).json({
+      success: true,
+
+      message: smsSent
+        ? "Scheme subscribed successfully. Enrollment SMS sent."
+        : "Scheme subscribed successfully, but enrollment SMS could not be sent.",
+
+      smsSent,
+
+      smsMessage: smsSent ? "Enrollment SMS sent successfully" : smsError,
+
+      data: userScheme,
+    });
+  } catch (error) {
+    console.error("Create User Scheme Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Unable to create user scheme",
+    });
+  }
 };
-
 // exports.createUserScheme = async (req, res) => {
 
 //     try {
@@ -359,213 +391,156 @@ exports.createUserScheme = async (req, res) => {
 // Get All User Schemes
 // ============================
 exports.getAllUserSchemes = async (req, res) => {
+  try {
+    const userSchemes = await UserScheme.find()
 
-    try {
+      .populate(
+        "user",
 
-        const userSchemes =
+        "name email phone",
+      )
 
-            await UserScheme.find()
+      .populate(
+        "scheme",
 
-                .populate(
+        "name amount monthlyAmount",
+      )
 
-                    "user",
+      .sort({
+        createdAt: -1,
+      });
 
-                    "name email phone"
+    res.status(200).json({
+      success: true,
 
-                )
+      count: userSchemes.length,
 
-                .populate(
+      data: userSchemes,
+    });
+  } catch (error) {
+    console.log(error);
 
-                    "scheme",
+    res.status(500).json({
+      success: false,
 
-                    "name amount monthlyAmount"
-
-                )
-
-                .sort({
-
-                    createdAt: -1
-
-                });
-
-        res.status(200).json({
-
-            success: true,
-
-            count:
-
-                userSchemes.length,
-
-            data:
-
-                userSchemes
-
-        });
-
-    }
-
-    catch (error) {
-
-        console.log(error);
-
-        res.status(500).json({
-
-            success: false,
-
-            message:
-
-                error.message
-
-        });
-
-    }
-
+      message: error.message,
+    });
+  }
 };
 
 // ============================
 // Get User Scheme By Id
 // ============================
 exports.getUserSchemeByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
 
-    try {
+    const schemes = await UserScheme.find({
+      user: userId,
+    })
 
-        const { userId } = req.params;
+      .populate({
+        path: "user",
 
-        const schemes = await UserScheme.find({
+        select: "name email phone",
+      })
 
-            user: userId
+      .populate({
+        path: "scheme",
+      })
 
-        })
+      .sort({
+        createdAt: -1,
+      });
 
-            .populate({
+    if (!schemes.length) {
+      return res.status(404).json({
+        success: false,
 
-                path: "user",
-
-                select:
-                    "name email phone"
-
-            })
-
-            .populate({
-
-                path: "scheme"
-
-            })
-
-            .sort({
-
-                createdAt: -1
-
-            });
-
-        if (!schemes.length) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "No subscribed schemes found"
-
-            });
-
-        }
-
-        res.status(200).json({
-
-            success: true,
-
-            count: schemes.length,
-
-            data: schemes
-
-        });
-
+        message: "No subscribed schemes found",
+      });
     }
 
-    catch (error) {
+    res.status(200).json({
+      success: true,
 
-        console.log(error);
+      count: schemes.length,
 
-        res.status(500).json({
+      data: schemes,
+    });
+  } catch (error) {
+    console.log(error);
 
-            success: false,
+    res.status(500).json({
+      success: false,
 
-            message: error.message
-
-        });
-
-    }
-
+      message: error.message,
+    });
+  }
 };
 
 // ============================
 // Update User Scheme
 // ============================
 exports.updateUserScheme = async (req, res) => {
-    try {
+  try {
+    const userScheme = await UserScheme.findById(req.params.id);
 
-        const userScheme = await UserScheme.findById(req.params.id);
-
-        if (!userScheme) {
-            return res.status(404).json({
-                success: false,
-                message: "User Scheme not found"
-            });
-        }
-
-        const updatedScheme = await UserScheme.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            {
-                new: true,
-                runValidators: true
-            }
-        );
-
-        res.status(200).json({
-            success: true,
-            message: "User Scheme updated successfully",
-            data: updatedScheme
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+    if (!userScheme) {
+      return res.status(404).json({
+        success: false,
+        message: "User Scheme not found",
+      });
     }
-};
 
+    const updatedScheme = await UserScheme.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "User Scheme updated successfully",
+      data: updatedScheme,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 
 // ============================
 // Delete User Scheme
 // ============================
 exports.deleteUserScheme = async (req, res) => {
-    try {
+  try {
+    const userScheme = await UserScheme.findById(req.params.id);
 
-        const userScheme = await UserScheme.findById(req.params.id);
-
-        if (!userScheme) {
-            return res.status(404).json({
-                success: false,
-                message: "User Scheme not found"
-            });
-        }
-
-        await UserScheme.findByIdAndDelete(req.params.id);
-
-        res.status(200).json({
-            success: true,
-            message: "User Scheme deleted successfully"
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+    if (!userScheme) {
+      return res.status(404).json({
+        success: false,
+        message: "User Scheme not found",
+      });
     }
+
+    await UserScheme.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      message: "User Scheme deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
 };
 
 // ============================
@@ -573,78 +548,58 @@ exports.deleteUserScheme = async (req, res) => {
 // ============================
 
 exports.getUserSchemeById = async (req, res) => {
+  try {
+    const { userId, userSchemeId } = req.params;
 
-    try {
+    // ==========================
+    // VALIDATION
+    // ==========================
 
-        const { userId, userSchemeId } = req.params;
+    if (!userId || !userSchemeId) {
+      return res.status(400).json({
+        success: false,
 
-        // ==========================
-        // VALIDATION
-        // ==========================
-
-        if (!userId || !userSchemeId) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message: "User Id and User Scheme Id are required"
-
-            });
-
-        }
-
-        // ==========================
-        // GET USER SCHEME
-        // ==========================
-
-        const userScheme = await UserScheme
-            .findOne({
-                _id: userSchemeId,
-                user: userId
-            })
-            .populate("scheme")
-            .populate("user", "-password -token");
-
-        if (!userScheme) {
-
-            return res.status(404).json({
-
-                success: false,
-
-                message: "Subscribed scheme not found"
-
-            });
-
-        }
-
-        // ==========================
-        // RESPONSE
-        // ==========================
-
-        return res.status(200).json({
-
-            success: true,
-
-            message: "Subscribed scheme fetched successfully",
-
-            data: userScheme
-
-        });
-
-    }
-    catch (error) {
-
-        console.log(error);
-
-        return res.status(500).json({
-
-            success: false,
-
-            message: error.message
-
-        });
-
+        message: "User Id and User Scheme Id are required",
+      });
     }
 
+    // ==========================
+    // GET USER SCHEME
+    // ==========================
+
+    const userScheme = await UserScheme.findOne({
+      _id: userSchemeId,
+      user: userId,
+    })
+      .populate("scheme")
+      .populate("user", "-password -token");
+
+    if (!userScheme) {
+      return res.status(404).json({
+        success: false,
+
+        message: "Subscribed scheme not found",
+      });
+    }
+
+    // ==========================
+    // RESPONSE
+    // ==========================
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Subscribed scheme fetched successfully",
+
+      data: userScheme,
+    });
+  } catch (error) {
+    console.log(error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message,
+    });
+  }
 };

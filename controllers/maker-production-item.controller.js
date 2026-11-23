@@ -4,266 +4,225 @@ const MakerProductionItem = require("../models/maker-production-item");
 const MakerProduction = require("../models/maker-production");
 const Product = require("../models/product");
 
-
 // =====================================================
 // HELPER: VALIDATE OBJECT ID
 // =====================================================
 
 const isValidObjectId = (id) => {
-
-    return mongoose.Types.ObjectId.isValid(id);
-
+  return mongoose.Types.ObjectId.isValid(id);
 };
 
 exports.createMakerProductionItem = async (req, res) => {
-    try {
-
-        const {
-            production,
-            product,
-            variantId,
-            quantityGiven,
-            quantityReceived,
-            notes
-        } = req.body;
-
-
-        // ==========================================
-        // 1. BASIC VALIDATION
-        // ==========================================
-
-        if (!production) {
-            return res.status(400).json({
-                success: false,
-                message: "Production is required"
-            });
-        }
-
-        if (!product) {
-            return res.status(400).json({
-                success: false,
-                message: "Product is required"
-            });
-        }
-
-        if (!variantId) {
-            return res.status(400).json({
-                success: false,
-                message: "Variant is required"
-            });
-        }
-
-
-        // ==========================================
-        // 2. QUANTITY VALIDATION
-        // ==========================================
-
-        const given = Number(quantityGiven);
-
-        const received =
-            quantityReceived === undefined ||
-                quantityReceived === null ||
-                quantityReceived === ""
-                ? 0
-                : Number(quantityReceived);
-
-
-        if (!given || given < 1) {
-            return res.status(400).json({
-                success: false,
-                message: "Quantity given must be greater than 0"
-            });
-        }
-
-
-        if (received < 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Quantity received cannot be negative"
-            });
-        }
-
-
-        if (received > given) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Quantity received cannot be greater than quantity given"
-            });
-        }
-
-
-        // ==========================================
-        // 3. CHECK MAKER PRODUCTION
-        // ==========================================
-
-        const productionExists =
-            await MakerProduction.findById(production);
-
-        if (!productionExists) {
-            return res.status(404).json({
-                success: false,
-                message: "Maker Production not found"
-            });
-        }
-
-
-        // ==========================================
-        // 4. CHECK PRODUCT
-        // ==========================================
-
-        const existingProduct =
-            await Product.findById(product);
-
-        if (!existingProduct) {
-            return res.status(404).json({
-                success: false,
-                message: "Product not found"
-            });
-        }
-
-
-        // ==========================================
-        // 5. FIND SELECTED VARIANT
-        // ==========================================
-
-        const selectedVariant =
-            existingProduct.variants.find(
-                variant =>
-                    String(variant._id) ===
-                    String(variantId)
-            );
-
-
-        if (!selectedVariant) {
-            return res.status(404).json({
-                success: false,
-                message:
-                    "Variant not found in selected product"
-            });
-        }
-
-
-        // ==========================================
-        // 6. CHECK DUPLICATE ITEM
-        // ==========================================
-
-        const existingItem =
-            await MakerProductionItem.findOne({
-                production: production,
-                product: product,
-                variantId: selectedVariant._id,
-            });
-
-
-        if (existingItem) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "This product variant is already added to this production"
-            });
-        }
-
-
-        // ==========================================
-        // 7. CREATE MAKER PRODUCTION ITEM
-        // ==========================================
-
-        const newItem =
-            await MakerProductionItem.create({
-
-                production: production,
-
-                product: product,
-
-                variantId: variantId,
-
-                quantityGiven: given,
-
-                quantityReceived: received,
-
-                availableQuantity: received,
-
-                notes: notes || ""
-            });
-
-
-        // ==========================================
-        // 8. UPDATE PRODUCT VARIANT STOCK
-        // ONLY RECEIVED QUANTITY
-        // ==========================================
-
-        const oldStock =
-            Number(selectedVariant.stock) || 0;
-
-
-        // Maker ki ichina quantity stock ki ADD cheyyakudadhu.
-        // Only maker daggara nundi received quantity
-        // Product stock ki add cheyyali.
-
-        const newStock =
-            oldStock + received;
-
-
-        selectedVariant.stock = newStock;
-
-
-        // Save Product
-        await existingProduct.save();
-
-
-        // ==========================================
-        // 9. POPULATE RESPONSE
-        // ==========================================
-
-        const populatedItem =
-            await MakerProductionItem.findById(
-                newItem._id
-            )
-                .populate("production")
-                .populate("product");
-
-
-        // ==========================================
-        // 10. SUCCESS RESPONSE
-        // ==========================================
-
-        return res.status(201).json({
-
-            success: true,
-
-            message:
-                "Maker Production Item created and product stock updated successfully",
-
-            data: populatedItem,
-
-            stock: {
-
-                previousStock: oldStock,
-
-                quantityGiven: given,
-
-                quantityReceived: received,
-
-                currentStock: newStock
-            }
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "Create Maker Production Item Error:",
-            error
-        );
-
-        return res.status(500).json({
-
-            success: false,
-
-            message: error.message
-        });
+  try {
+    const {
+      production,
+      product,
+      variantId,
+      quantityGiven,
+      quantityReceived,
+      notes,
+    } = req.body;
+
+    // ==========================================
+    // 1. BASIC VALIDATION
+    // ==========================================
+
+    if (!production) {
+      return res.status(400).json({
+        success: false,
+        message: "Production is required",
+      });
     }
+
+    if (!product) {
+      return res.status(400).json({
+        success: false,
+        message: "Product is required",
+      });
+    }
+
+    if (!variantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Variant is required",
+      });
+    }
+
+    // ==========================================
+    // 2. QUANTITY VALIDATION
+    // ==========================================
+
+    const given = Number(quantityGiven);
+
+    const received =
+      quantityReceived === undefined ||
+      quantityReceived === null ||
+      quantityReceived === ""
+        ? 0
+        : Number(quantityReceived);
+
+    if (!given || given < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity given must be greater than 0",
+      });
+    }
+
+    if (received < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity received cannot be negative",
+      });
+    }
+
+    if (received > given) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity received cannot be greater than quantity given",
+      });
+    }
+
+    // ==========================================
+    // 3. CHECK MAKER PRODUCTION
+    // ==========================================
+
+    const productionExists = await MakerProduction.findById(production);
+
+    if (!productionExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Maker Production not found",
+      });
+    }
+
+    // ==========================================
+    // 4. CHECK PRODUCT
+    // ==========================================
+
+    const existingProduct = await Product.findById(product);
+
+    if (!existingProduct) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    // ==========================================
+    // 5. FIND SELECTED VARIANT
+    // ==========================================
+
+    const selectedVariant = existingProduct.variants.find(
+      (variant) => String(variant._id) === String(variantId),
+    );
+
+    if (!selectedVariant) {
+      return res.status(404).json({
+        success: false,
+        message: "Variant not found in selected product",
+      });
+    }
+
+    // ==========================================
+    // 6. CHECK DUPLICATE ITEM
+    // ==========================================
+
+    const existingItem = await MakerProductionItem.findOne({
+      production: production,
+      product: product,
+      variantId: selectedVariant._id,
+    });
+
+    if (existingItem) {
+      return res.status(400).json({
+        success: false,
+        message: "This product variant is already added to this production",
+      });
+    }
+
+    // ==========================================
+    // 7. CREATE MAKER PRODUCTION ITEM
+    // ==========================================
+
+    const newItem = await MakerProductionItem.create({
+      production: production,
+
+      product: product,
+
+      variantId: selectedVariant._id,
+
+      variantDetails: {
+        size: selectedVariant.size || "",
+        metalPurity: selectedVariant.metalPurity || "",
+        metalColor: selectedVariant.metalColor || "",
+      },
+
+      quantityGiven: given,
+
+      quantityReceived: received,
+
+      availableQuantity: received,
+
+      notes: notes || "",
+    });
+
+    // ==========================================
+    // 8. UPDATE PRODUCT VARIANT STOCK
+    // ONLY RECEIVED QUANTITY
+    // ==========================================
+
+    const oldStock = Number(selectedVariant.stock) || 0;
+
+    // Maker ki ichina quantity stock ki ADD cheyyakudadhu.
+    // Only maker daggara nundi received quantity
+    // Product stock ki add cheyyali.
+
+    const newStock = oldStock + received;
+
+    selectedVariant.stock = newStock;
+
+    // Save Product
+    await existingProduct.save();
+
+    // ==========================================
+    // 9. POPULATE RESPONSE
+    // ==========================================
+
+    const populatedItem = await MakerProductionItem.findById(newItem._id)
+      .populate("production")
+      .populate("product");
+
+    // ==========================================
+    // 10. SUCCESS RESPONSE
+    // ==========================================
+
+    return res.status(201).json({
+      success: true,
+
+      message:
+        "Maker Production Item created and product stock updated successfully",
+
+      data: populatedItem,
+
+      stock: {
+        previousStock: oldStock,
+
+        quantityGiven: given,
+
+        quantityReceived: received,
+
+        currentStock: newStock,
+      },
+    });
+  } catch (error) {
+    console.error("Create Maker Production Item Error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message,
+    });
+  }
 };
 
 // =====================================================
@@ -271,798 +230,552 @@ exports.createMakerProductionItem = async (req, res) => {
 // GET /get-all-maker-production-items
 // =====================================================
 
-exports.getAllMakerProductionItems =
-    async (req, res) => {
+exports.getAllMakerProductionItems = async (req, res) => {
+  try {
+    const items = await MakerProductionItem.find()
 
-        try {
+      // Production + Maker
+      .populate({
+        path: "production",
+        select:
+          "productionNumber issueDate expectedDate receivedDate status notes maker",
+        populate: {
+          path: "maker",
+          select: "name phone",
+        },
+      })
 
-            const items =
-                await MakerProductionItem.find()
+      // Product
+      .populate("product")
 
-                    // Production + Maker
-                    .populate({
-                        path: "production",
-                        select:
-                            "productionNumber issueDate expectedDate receivedDate status notes maker",
-                        populate: {
-                            path: "maker",
-                            select: "name phone"
-                        }
-                    })
+      .sort({
+        createdAt: -1,
+      });
 
-                    // Product
-                    .populate(
-                        "product"
-                    )
+    return res.status(200).json({
+      success: true,
 
-                    .sort({
-                        createdAt: -1
-                    });
+      count: items.length,
 
+      data: items,
+    });
+  } catch (error) {
+    console.log("Get All Maker Production Items Error:", error);
 
-            return res.status(200).json({
+    return res.status(500).json({
+      success: false,
 
-                success: true,
-
-                count:
-                    items.length,
-
-                data:
-                    items
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get All Maker Production Items Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
-
-
+      message: error.message,
+    });
+  }
+};
 
 // =====================================================
 // GET ITEMS BY PRODUCTION
 // GET /get-production-items/:productionId
 // =====================================================
 
-exports.getProductionItems =
-    async (req, res) => {
+exports.getProductionItems = async (req, res) => {
+  try {
+    const { productionId } = req.params;
 
-        try {
+    // ==========================================
+    // VALIDATE ID
+    // ==========================================
 
-            const {
-                productionId
-            } = req.params;
+    if (!isValidObjectId(productionId)) {
+      return res.status(400).json({
+        success: false,
 
+        message: "Invalid Production ID",
+      });
+    }
 
-            // ==========================================
-            // VALIDATE ID
-            // ==========================================
+    // ==========================================
+    // CHECK PRODUCTION
+    // ==========================================
 
-            if (
-                !isValidObjectId(productionId)
-            ) {
+    const production = await MakerProduction.findById(productionId);
 
-                return res.status(400).json({
+    if (!production) {
+      return res.status(404).json({
+        success: false,
 
-                    success: false,
+        message: "Maker production not found",
+      });
+    }
 
-                    message:
-                        "Invalid Production ID"
+    // ==========================================
+    // GET ITEMS
+    // ==========================================
 
-                });
+    const items = await MakerProductionItem.find({
+      production: productionId,
+    })
 
-            }
+      .populate(
+        "production",
+        "productionNumber issueDate expectedDate receivedDate status notes",
+      )
 
+      .populate("product")
 
-            // ==========================================
-            // CHECK PRODUCTION
-            // ==========================================
+      .sort({
+        createdAt: -1,
+      });
 
-            const production =
-                await MakerProduction.findById(
-                    productionId
-                );
+    return res.status(200).json({
+      success: true,
 
+      production: {
+        id: production._id,
 
-            if (!production) {
+        productionNumber: production.productionNumber,
 
-                return res.status(404).json({
+        status: production.status,
+      },
 
-                    success: false,
+      count: items.length,
 
-                    message:
-                        "Maker production not found"
+      data: items,
+    });
+  } catch (error) {
+    console.log("Get Production Items Error:", error);
 
-                });
+    return res.status(500).json({
+      success: false,
 
-            }
-
-
-            // ==========================================
-            // GET ITEMS
-            // ==========================================
-
-            const items =
-                await MakerProductionItem.find({
-
-                    production:
-                        productionId
-
-                })
-
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status notes"
-                    )
-
-                    .populate(
-                        "product"
-                    )
-
-                    .sort({
-                        createdAt: -1
-                    });
-
-
-            return res.status(200).json({
-
-                success: true,
-
-                production: {
-
-                    id:
-                        production._id,
-
-                    productionNumber:
-                        production.productionNumber,
-
-                    status:
-                        production.status
-
-                },
-
-                count:
-                    items.length,
-
-                data:
-                    items
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get Production Items Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
-
-
+      message: error.message,
+    });
+  }
+};
 
 // =====================================================
 // GET ITEMS BY PRODUCT
 // GET /get-product-production-items/:productId
 // =====================================================
 
-exports.getProductProductionItems =
-    async (req, res) => {
+exports.getProductProductionItems = async (req, res) => {
+  try {
+    const { productId } = req.params;
 
-        try {
+    // ==========================================
+    // VALIDATE ID
+    // ==========================================
 
-            const {
-                productId
-            } = req.params;
+    if (!isValidObjectId(productId)) {
+      return res.status(400).json({
+        success: false,
 
+        message: "Invalid Product ID",
+      });
+    }
 
-            // ==========================================
-            // VALIDATE ID
-            // ==========================================
+    // ==========================================
+    // CHECK PRODUCT
+    // ==========================================
 
-            if (
-                !isValidObjectId(productId)
-            ) {
+    const product = await Product.findById(productId);
 
-                return res.status(400).json({
+    if (!product) {
+      return res.status(404).json({
+        success: false,
 
-                    success: false,
+        message: "Product not found",
+      });
+    }
 
-                    message:
-                        "Invalid Product ID"
+    // ==========================================
+    // GET ITEMS
+    // ==========================================
 
-                });
+    const items = await MakerProductionItem.find({
+      product: productId,
+    })
 
-            }
+      .populate(
+        "production",
+        "productionNumber issueDate expectedDate receivedDate status",
+      )
 
+      .populate("product")
 
-            // ==========================================
-            // CHECK PRODUCT
-            // ==========================================
+      .sort({
+        createdAt: -1,
+      });
 
-            const product =
-                await Product.findById(
-                    productId
-                );
+    return res.status(200).json({
+      success: true,
 
+      product: {
+        id: product._id,
+      },
 
-            if (!product) {
+      count: items.length,
 
-                return res.status(404).json({
+      data: items,
+    });
+  } catch (error) {
+    console.log("Get Product Production Items Error:", error);
 
-                    success: false,
+    return res.status(500).json({
+      success: false,
 
-                    message:
-                        "Product not found"
-
-                });
-
-            }
-
-
-            // ==========================================
-            // GET ITEMS
-            // ==========================================
-
-            const items =
-                await MakerProductionItem.find({
-
-                    product:
-                        productId
-
-                })
-
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status"
-                    )
-
-                    .populate(
-                        "product"
-                    )
-
-                    .sort({
-                        createdAt: -1
-                    });
-
-
-            return res.status(200).json({
-
-                success: true,
-
-                product: {
-
-                    id:
-                        product._id
-
-                },
-
-                count:
-                    items.length,
-
-                data:
-                    items
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get Product Production Items Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
-
-
+      message: error.message,
+    });
+  }
+};
 
 // =====================================================
 // GET ITEMS BY VARIANT
 // GET /get-variant-production-items/:variantId
 // =====================================================
 
-exports.getVariantProductionItems =
-    async (req, res) => {
+exports.getVariantProductionItems = async (req, res) => {
+  try {
+    const { variantId } = req.params;
 
-        try {
+    // ==========================================
+    // VALIDATE ID
+    // ==========================================
 
-            const {
-                variantId
-            } = req.params;
+    if (!isValidObjectId(variantId)) {
+      return res.status(400).json({
+        success: false,
 
+        message: "Invalid Variant ID",
+      });
+    }
 
-            // ==========================================
-            // VALIDATE ID
-            // ==========================================
+    // ==========================================
+    // FIND ITEMS
+    // ==========================================
 
-            if (
-                !isValidObjectId(variantId)
-            ) {
+    const items = await MakerProductionItem.find({
+      variantId,
+    })
 
-                return res.status(400).json({
+      .populate(
+        "production",
+        "productionNumber issueDate expectedDate receivedDate status",
+      )
 
-                    success: false,
+      .populate("product")
 
-                    message:
-                        "Invalid Variant ID"
+      .sort({
+        createdAt: -1,
+      });
 
-                });
+    return res.status(200).json({
+      success: true,
 
-            }
+      count: items.length,
 
+      data: items,
+    });
+  } catch (error) {
+    console.log("Get Variant Production Items Error:", error);
 
-            // ==========================================
-            // FIND ITEMS
-            // ==========================================
+    return res.status(500).json({
+      success: false,
 
-            const items =
-                await MakerProductionItem.find({
+      message: error.message,
+    });
+  }
+};
 
-                    variantId
+exports.getMakerProductionItemById = async (req, res) => {
+  try {
+    const { id } = req.params;
 
-                })
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
 
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status"
-                    )
+        message: "Invalid Maker Production Item ID",
+      });
+    }
 
-                    .populate(
-                        "product"
-                    )
+    const item = await MakerProductionItem.findById(id)
 
-                    .sort({
-                        createdAt: -1
-                    });
+      .populate(
+        "production",
+        "productionNumber issueDate expectedDate receivedDate status notes",
+      )
 
+      .populate("product");
 
-            return res.status(200).json({
+    if (!item) {
+      return res.status(404).json({
+        success: false,
 
-                success: true,
+        message: "Maker production item not found",
+      });
+    }
 
-                count:
-                    items.length,
+    return res.status(200).json({
+      success: true,
 
-                data:
-                    items
+      data: item,
+    });
+  } catch (error) {
+    console.log("Get Maker Production Item By ID Error:", error);
 
-            });
+    return res.status(500).json({
+      success: false,
 
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get Variant Production Items Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
-
-
-exports.getMakerProductionItemById =
-    async (req, res) => {
-
-        try {
-
-            const {
-                id
-            } = req.params;
-
-
-            if (
-                !mongoose.Types.ObjectId.isValid(id)
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Invalid Maker Production Item ID"
-
-                });
-
-            }
-
-
-            const item =
-                await MakerProductionItem.findById(id)
-
-                    .populate(
-                        "production",
-                        "productionNumber issueDate expectedDate receivedDate status notes"
-                    )
-
-                    .populate(
-                        "product"
-                    );
-
-
-            if (!item) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Maker production item not found"
-
-                });
-
-            }
-
-
-            return res.status(200).json({
-
-                success: true,
-
-                data:
-                    item
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Get Maker Production Item By ID Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
+      message: error.message,
+    });
+  }
+};
 // =====================================================
 // UPDATE MAKER PRODUCTION ITEM
 // PUT /update-maker-production-item/:id
 // =====================================================
 exports.updateMakerProductionItem = async (req, res) => {
-    const session = await mongoose.startSession();
+  const session = await mongoose.startSession();
 
-    try {
-        let responseData = null;
+  try {
+    let responseData = null;
 
-        await session.withTransaction(async () => {
-            const { id } = req.params;
-            const {
-                production,
-                product,
-                variantId,
-                quantityGiven,
-                quantityReceived,
-                notes
-            } = req.body;
+    await session.withTransaction(async () => {
+      const { id } = req.params;
+      const {
+        production,
+        product,
+        variantId,
+        quantityGiven,
+        quantityReceived,
+        notes,
+      } = req.body;
 
-            // 1. Validate item ID
-            if (!mongoose.Types.ObjectId.isValid(id)) {
-                throw new Error("Invalid Maker Production Item ID");
-            }
+      // 1. Validate item ID
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new Error("Invalid Maker Production Item ID");
+      }
 
-            // 2. Find existing item
-            const existingItem = await MakerProductionItem.findById(id)
-                .session(session);
+      // 2. Find existing item
+      const existingItem =
+        await MakerProductionItem.findById(id).session(session);
 
-            if (!existingItem) {
-                throw new Error("Maker Production Item not found");
-            }
+      if (!existingItem) {
+        throw new Error("Maker Production Item not found");
+      }
 
-            // 3. Resolve final values
-            const finalProduction =
-                production ?? existingItem.production;
+      // 3. Resolve final values
+      const finalProduction = production ?? existingItem.production;
 
-            const finalProduct =
-                product ?? existingItem.product;
+      const finalProduct = product ?? existingItem.product;
 
-            const finalVariantId =
-                variantId ?? existingItem.variantId;
+      const finalVariantId = variantId ?? existingItem.variantId;
 
-            const finalQuantityGiven =
-                quantityGiven !== undefined
-                    ? Number(quantityGiven)
-                    : existingItem.quantityGiven;
+      const finalQuantityGiven =
+        quantityGiven !== undefined
+          ? Number(quantityGiven)
+          : existingItem.quantityGiven;
 
-            const finalQuantityReceived =
-                quantityReceived !== undefined
-                    ? Number(quantityReceived)
-                    : existingItem.quantityReceived;
+      const finalQuantityReceived =
+        quantityReceived !== undefined
+          ? Number(quantityReceived)
+          : existingItem.quantityReceived;
 
-            const finalNotes =
-                notes !== undefined
-                    ? notes
-                    : existingItem.notes;
+      const finalNotes = notes !== undefined ? notes : existingItem.notes;
 
-            // 4. Validate IDs
-            if (
-                !mongoose.Types.ObjectId.isValid(finalProduction) ||
-                !mongoose.Types.ObjectId.isValid(finalProduct) ||
-                !mongoose.Types.ObjectId.isValid(finalVariantId)
-            ) {
-                throw new Error(
-                    "Invalid production, product, or variant ID"
-                );
-            }
+      // 4. Validate IDs
+      if (
+        !mongoose.Types.ObjectId.isValid(finalProduction) ||
+        !mongoose.Types.ObjectId.isValid(finalProduct) ||
+        !mongoose.Types.ObjectId.isValid(finalVariantId)
+      ) {
+        throw new Error("Invalid production, product, or variant ID");
+      }
 
-            // 5. Validate quantities
-            if (
-                !Number.isFinite(finalQuantityGiven) ||
-                !Number.isFinite(finalQuantityReceived) ||
-                finalQuantityGiven < 1 ||
-                finalQuantityReceived < 0
-            ) {
-                throw new Error("Invalid quantity values");
-            }
+      // 5. Validate quantities
+      if (
+        !Number.isFinite(finalQuantityGiven) ||
+        !Number.isFinite(finalQuantityReceived) ||
+        finalQuantityGiven < 1 ||
+        finalQuantityReceived < 0
+      ) {
+        throw new Error("Invalid quantity values");
+      }
 
-            if (finalQuantityReceived > finalQuantityGiven) {
-                throw new Error(
-                    "Received quantity cannot exceed quantity given"
-                );
-            }
+      if (finalQuantityReceived > finalQuantityGiven) {
+        throw new Error("Received quantity cannot exceed quantity given");
+      }
 
-            // 6. Load production
-            const productionExists = await MakerProduction.findById(
-                finalProduction
-            ).session(session);
+      // 6. Load production
+      const productionExists =
+        await MakerProduction.findById(finalProduction).session(session);
 
-            if (!productionExists) {
-                throw new Error("Maker Production not found");
-            }
+      if (!productionExists) {
+        throw new Error("Maker Production not found");
+      }
 
-            // 7. Load selected product
-            const selectedProduct = await Product.findById(
-                finalProduct
-            ).session(session);
+      // 7. Load selected product
+      const selectedProduct =
+        await Product.findById(finalProduct).session(session);
 
-            if (!selectedProduct) {
-                throw new Error("Product not found");
-            }
+      if (!selectedProduct) {
+        throw new Error("Product not found");
+      }
 
-            // 8. Find selected variant inside Product.variants
-            const selectedVariant = selectedProduct.variants.id(
-                finalVariantId
-            );
+      // 8. Find selected variant inside Product.variants
+      const selectedVariant = selectedProduct.variants.id(finalVariantId);
 
-            if (!selectedVariant) {
-                throw new Error(
-                    "Selected variant not found in the product"
-                );
-            }
+      if (!selectedVariant) {
+        throw new Error("Selected variant not found in the product");
+      }
 
-            // 9. Existing values
-            const oldProductId = existingItem.product.toString();
-            const oldVariantId = existingItem.variantId.toString();
+      // 9. Existing values
+      const oldProductId = existingItem.product.toString();
+      const oldVariantId = existingItem.variantId.toString();
 
-            const oldQuantityReceived =
-                Number(existingItem.quantityReceived || 0);
+      const oldQuantityReceived = Number(existingItem.quantityReceived || 0);
 
-            const oldAvailableQuantity =
-                Number(existingItem.availableQuantity || 0);
+      const oldAvailableQuantity = Number(existingItem.availableQuantity || 0);
 
-            // Existing stock contribution is based on available quantity.
-            const finalAvailableQuantity =
-                finalQuantityReceived -
-                (oldQuantityReceived - oldAvailableQuantity);
+      // Existing stock contribution is based on available quantity.
+      const finalAvailableQuantity =
+        finalQuantityReceived - (oldQuantityReceived - oldAvailableQuantity);
 
-            if (finalAvailableQuantity < 0) {
-                throw new Error(
-                    "Calculated available quantity cannot be negative"
-                );
-            }
+      if (finalAvailableQuantity < 0) {
+        throw new Error("Calculated available quantity cannot be negative");
+      }
 
-            const sameProduct =
-                oldProductId === finalProduct.toString();
+      const sameProduct = oldProductId === finalProduct.toString();
 
-            const sameVariant =
-                sameProduct &&
-                oldVariantId === finalVariantId.toString();
+      const sameVariant =
+        sameProduct && oldVariantId === finalVariantId.toString();
 
-            // 10. Prevent duplicate production/product/variant records
-            const duplicateItem = await MakerProductionItem.findOne({
-                _id: { $ne: existingItem._id },
-                production: finalProduction,
-                product: finalProduct,
-                variantId: finalVariantId
-            }).session(session);
+      // 10. Prevent duplicate production/product/variant records
+      const duplicateItem = await MakerProductionItem.findOne({
+        _id: { $ne: existingItem._id },
+        production: finalProduction,
+        product: finalProduct,
+        variantId: finalVariantId,
+      }).session(session);
 
-            if (duplicateItem) {
-                throw new Error(
-                    "An item already exists for this production, product, and variant"
-                );
-            }
+      if (duplicateItem) {
+        throw new Error(
+          "An item already exists for this production, product, and variant",
+        );
+      }
 
-            // 11. Helper: update embedded Product variant stock
-            const adjustVariantStock = async (
-                productId,
-                selectedVariantId,
-                change
-            ) => {
-                if (change === 0) return;
+      // 11. Helper: update embedded Product variant stock
+      const adjustVariantStock = async (
+        productId,
+        selectedVariantId,
+        change,
+      ) => {
+        if (change === 0) return;
 
-                const result = await Product.updateOne(
-                    {
-                        _id: productId,
-                        "variants._id": selectedVariantId
-                    },
-                    {
-                        $inc: {
-                            "variants.$.stock": change
-                        }
-                    },
-                    { session }
-                );
-
-                if (result.matchedCount === 0) {
-                    throw new Error(
-                        "Product or selected variant not found while updating stock"
-                    );
-                }
-            };
-
-            // 12. Update Product variant stock
-            if (sameVariant) {
-                // Same product + same variant:
-                // apply only the received-quantity difference.
-                const stockDifference =
-                    finalAvailableQuantity - oldAvailableQuantity;
-
-                await adjustVariantStock(
-                    finalProduct,
-                    finalVariantId,
-                    stockDifference
-                );
-            } else {
-                // Product or variant changed.
-                // Try to reverse the old contribution if the old variant exists.
-                const oldProduct = await Product.findById(
-                    existingItem.product
-                ).session(session);
-
-                const oldVariant = oldProduct
-                    ? oldProduct.variants.id(existingItem.variantId)
-                    : null;
-
-                if (oldVariant) {
-                    await adjustVariantStock(
-                        existingItem.product,
-                        existingItem.variantId,
-                        -oldAvailableQuantity
-                    );
-
-                    // Add the final available quantity to the new variant.
-                    await adjustVariantStock(
-                        finalProduct,
-                        finalVariantId,
-                        finalAvailableQuantity
-                    );
-                } else {
-                    /*
-                     * Legacy/stale variant ID:
-                     * The old variant no longer exists in Product.variants.
-                     * Do not try to decrement a nonexistent variant.
-                     *
-                     * In your current case, the Product's current variant stock
-                     * is 0 and the received quantity is 10, so add 10 to the
-                     * currently selected variant.
-                     *
-                     * This is a reconciliation assumption. If the old quantity
-                     * was already counted elsewhere, verify stock before using
-                     * this branch to avoid double-counting.
-                     */
-                    await adjustVariantStock(
-                        finalProduct,
-                        finalVariantId,
-                        finalAvailableQuantity
-                    );
-                }
-            }
-
-            // 13. Update MakerProductionItem
-            existingItem.production = finalProduction;
-            existingItem.product = finalProduct;
-            existingItem.variantId = finalVariantId;
-            existingItem.quantityGiven = finalQuantityGiven;
-            existingItem.quantityReceived = finalQuantityReceived;
-            existingItem.availableQuantity = finalAvailableQuantity;
-            existingItem.notes = finalNotes;
-
-            await existingItem.save({ session });
-
-            // 14. Return updated item with populated details
-            responseData = await MakerProductionItem.findById(
-                existingItem._id
-            )
-                .populate("production")
-                .populate("product")
-                .session(session);
-        });
-
-        return res.status(200).json({
-            success: true,
-            message: "Maker production item updated successfully",
-            data: responseData
-        });
-
-    } catch (error) {
-        console.error(
-            "Update Maker Production Item Error:",
-            error
+        const result = await Product.updateOne(
+          {
+            _id: productId,
+            "variants._id": selectedVariantId,
+          },
+          {
+            $inc: {
+              "variants.$.stock": change,
+            },
+          },
+          { session },
         );
 
-        return res.status(400).json({
-            success: false,
-            message: error.message || "Failed to update maker production item"
-        });
-    } finally {
-        await session.endSession();
-    }
+        if (result.matchedCount === 0) {
+          throw new Error(
+            "Product or selected variant not found while updating stock",
+          );
+        }
+      };
+
+      // 12. Update Product variant stock
+      if (sameVariant) {
+        // Same product + same variant:
+        // apply only the received-quantity difference.
+        const stockDifference = finalAvailableQuantity - oldAvailableQuantity;
+
+        await adjustVariantStock(finalProduct, finalVariantId, stockDifference);
+      } else {
+        // Product or variant changed.
+        // Try to reverse the old contribution if the old variant exists.
+        const oldProduct = await Product.findById(existingItem.product).session(
+          session,
+        );
+
+        const oldVariant = oldProduct
+          ? oldProduct.variants.id(existingItem.variantId)
+          : null;
+
+        if (oldVariant) {
+          await adjustVariantStock(
+            existingItem.product,
+            existingItem.variantId,
+            -oldAvailableQuantity,
+          );
+
+          // Add the final available quantity to the new variant.
+          await adjustVariantStock(
+            finalProduct,
+            finalVariantId,
+            finalAvailableQuantity,
+          );
+        } else {
+          /*
+           * Legacy/stale variant ID:
+           * The old variant no longer exists in Product.variants.
+           * Do not try to decrement a nonexistent variant.
+           *
+           * In your current case, the Product's current variant stock
+           * is 0 and the received quantity is 10, so add 10 to the
+           * currently selected variant.
+           *
+           * This is a reconciliation assumption. If the old quantity
+           * was already counted elsewhere, verify stock before using
+           * this branch to avoid double-counting.
+           */
+          await adjustVariantStock(
+            finalProduct,
+            finalVariantId,
+            finalAvailableQuantity,
+          );
+        }
+      }
+
+      // 13. Update MakerProductionItem
+      existingItem.production = finalProduction;
+      existingItem.product = finalProduct;
+      existingItem.variantId = finalVariantId;
+      existingItem.quantityGiven = finalQuantityGiven;
+      existingItem.quantityReceived = finalQuantityReceived;
+      existingItem.availableQuantity = finalAvailableQuantity;
+      existingItem.notes = finalNotes;
+
+      await existingItem.save({ session });
+
+      // 14. Return updated item with populated details
+      responseData = await MakerProductionItem.findById(existingItem._id)
+        .populate("production")
+        .populate("product")
+        .session(session);
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Maker production item updated successfully",
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("Update Maker Production Item Error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to update maker production item",
+    });
+  } finally {
+    await session.endSession();
+  }
 };
 // exports.updateMakerProductionItem =  async (req, res) => {
 
@@ -1071,7 +784,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //             const {
 //                 id
 //             } = req.params;
-
 
 //             // ==========================================
 //             // VALIDATE ID
@@ -1092,7 +804,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             // ==========================================
 //             // FIND EXISTING
 //             // ==========================================
@@ -1101,7 +812,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 await MakerProductionItem.findById(
 //                     id
 //                 );
-
 
 //             if (!existingItem) {
 
@@ -1116,7 +826,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             const {
 //                 production,
 //                 product,
@@ -1125,7 +834,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 quantityReceived,
 //                 notes
 //             } = req.body;
-
 
 //             // ==========================================
 //             // FINAL VALUES
@@ -1136,30 +844,25 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                     ? production
 //                     : existingItem.production;
 
-
 //             const finalProduct =
 //                 product !== undefined
 //                     ? product
 //                     : existingItem.product;
-
 
 //             const finalVariantId =
 //                 variantId !== undefined
 //                     ? variantId
 //                     : existingItem.variantId;
 
-
 //             const finalQuantityGiven =
 //                 quantityGiven !== undefined
 //                     ? Number(quantityGiven)
 //                     : Number(existingItem.quantityGiven);
 
-
 //             const finalQuantityReceived =
 //                 quantityReceived !== undefined
 //                     ? Number(quantityReceived)
 //                     : Number(existingItem.quantityReceived);
-
 
 //             // ==========================================
 //             // REQUIRED ID VALIDATION
@@ -1182,7 +885,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             if (
 //                 !isValidObjectId(
 //                     finalProduct
@@ -1200,7 +902,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             if (
 //                 !isValidObjectId(
 //                     finalVariantId
@@ -1217,7 +918,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 });
 
 //             }
-
 
 //             // ==========================================
 //             // QUANTITY VALIDATION
@@ -1241,7 +941,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             if (
 //                 !Number.isFinite(
 //                     finalQuantityReceived
@@ -1260,7 +959,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             if (
 //                 finalQuantityReceived >
 //                 finalQuantityGiven
@@ -1276,7 +974,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 });
 
 //             }
-
 
 //             // ==========================================
 //             // CALCULATE ALREADY SOLD QUANTITY
@@ -1298,12 +995,10 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                     existingItem.quantityReceived
 //                 ) || 0;
 
-
 //             const currentAvailableQuantity =
 //                 Number(
 //                     existingItem.availableQuantity
 //                 ) || 0;
-
 
 //             const soldQuantity =
 //                 Math.max(
@@ -1311,7 +1006,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                     currentAvailableQuantity,
 //                     0
 //                 );
-
 
 //             // ==========================================
 //             // NEW RECEIVED QUANTITY CANNOT BE LESS
@@ -1334,7 +1028,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             // ==========================================
 //             // CALCULATE NEW AVAILABLE QUANTITY
 //             // ==========================================
@@ -1350,7 +1043,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 finalQuantityReceived -
 //                 soldQuantity;
 
-
 //             // ==========================================
 //             // CHECK PRODUCTION
 //             // ==========================================
@@ -1359,7 +1051,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 await MakerProduction.findById(
 //                     finalProduction
 //                 );
-
 
 //             if (!productionExists) {
 
@@ -1374,7 +1065,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //             }
 
-
 //             // ==========================================
 //             // CHECK PRODUCT
 //             // ==========================================
@@ -1383,7 +1073,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 await Product.findById(
 //                     finalProduct
 //                 );
-
 
 //             if (!productExists) {
 
@@ -1397,7 +1086,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 });
 
 //             }
-
 
 //             // ==========================================
 //             // CHECK VARIANT
@@ -1413,7 +1101,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //                 );
 
-
 //             if (!variantExists) {
 
 //                 return res.status(404).json({
@@ -1426,7 +1113,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 });
 
 //             }
-
 
 //             // ==========================================
 //             // DUPLICATE CHECK
@@ -1450,7 +1136,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //                 });
 
-
 //             if (duplicate) {
 
 //                 return res.status(409).json({
@@ -1463,7 +1148,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                 });
 
 //             }
-
 
 //             // ==========================================
 //             // UPDATE
@@ -1519,7 +1203,6 @@ exports.updateMakerProductionItem = async (req, res) => {
 //                         "product"
 //                     );
 
-
 //             // ==========================================
 //             // SUCCESS
 //             // ==========================================
@@ -1538,14 +1221,12 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //         }
 
-
 //         catch (error) {
 
 //             console.log(
 //                 "Update Maker Production Item Error:",
 //                 error
 //             );
-
 
 //             return res.status(500).json({
 
@@ -1560,135 +1241,77 @@ exports.updateMakerProductionItem = async (req, res) => {
 
 //     };
 
-
 // =====================================================
 // DELETE MAKER PRODUCTION ITEM
 // DELETE /delete-maker-production-item/:id
 // =====================================================
 
-exports.deleteMakerProductionItem =
-    async (req, res) => {
+exports.deleteMakerProductionItem = async (req, res) => {
+  try {
+    const { id } = req.params;
 
-        try {
+    // ==========================================
+    // VALIDATE ID
+    // ==========================================
 
-            const {
-                id
-            } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
 
+        message: "Invalid Maker Production Item ID",
+      });
+    }
 
-            // ==========================================
-            // VALIDATE ID
-            // ==========================================
+    // ==========================================
+    // FIND
+    // ==========================================
 
-            if (
-                !isValidObjectId(id)
-            ) {
+    const item = await MakerProductionItem.findById(id)
 
-                return res.status(400).json({
+      .populate("production", "productionNumber status");
 
-                    success: false,
+    if (!item) {
+      return res.status(404).json({
+        success: false,
 
-                    message:
-                        "Invalid Maker Production Item ID"
+        message: "Maker production item not found",
+      });
+    }
 
-                });
+    // ==========================================
+    // COMPLETED PROTECTION
+    // ==========================================
 
-            }
+    if (item.production?.status === "COMPLETED") {
+      return res.status(400).json({
+        success: false,
 
+        message: "Items from a completed maker production cannot be deleted",
+      });
+    }
 
-            // ==========================================
-            // FIND
-            // ==========================================
+    // ==========================================
+    // DELETE
+    // ==========================================
 
-            const item =
-                await MakerProductionItem.findById(
-                    id
-                )
+    await MakerProductionItem.findByIdAndDelete(id);
 
-                    .populate(
-                        "production",
-                        "productionNumber status"
-                    );
+    return res.status(200).json({
+      success: true,
 
+      message: "Maker production item deleted successfully",
 
-            if (!item) {
+      data: {
+        id,
+      },
+    });
+  } catch (error) {
+    console.log("Delete Maker Production Item Error:", error);
 
-                return res.status(404).json({
+    return res.status(500).json({
+      success: false,
 
-                    success: false,
-
-                    message:
-                        "Maker production item not found"
-
-                });
-
-            }
-
-
-            // ==========================================
-            // COMPLETED PROTECTION
-            // ==========================================
-
-            if (
-                item.production?.status ===
-                "COMPLETED"
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Items from a completed maker production cannot be deleted"
-
-                });
-
-            }
-
-
-            // ==========================================
-            // DELETE
-            // ==========================================
-
-            await MakerProductionItem.findByIdAndDelete(
-                id
-            );
-
-
-            return res.status(200).json({
-
-                success: true,
-
-                message:
-                    "Maker production item deleted successfully",
-
-                data: {
-
-                    id
-
-                }
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.log(
-                "Delete Maker Production Item Error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    };
+      message: error.message,
+    });
+  }
+};

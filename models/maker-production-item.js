@@ -1,53 +1,68 @@
 const mongoose = require("mongoose");
 
-const makerProductionItemSchema = new mongoose.Schema({
-
+const makerProductionItemSchema = new mongoose.Schema(
+  {
     production: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "MakerProduction",
-        required: true
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MakerProduction",
+      required: true,
     },
 
     product: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Product",
-        required: true
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
     },
 
     variantId: {
-        type: mongoose.Schema.Types.ObjectId,
-        required: true
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+
+    // Store selected variant details permanently
+    variantDetails: {
+      size: {
+        type: String,
+        default: "",
+      },
+      metalPurity: {
+        type: String,
+        default: "",
+      },
+      metalColor: {
+        type: String,
+        default: "",
+      },
     },
 
     quantityGiven: {
-        type: Number,
-        required: true,
-        min: 1
+      type: Number,
+      required: true,
+      min: 1,
     },
 
     quantityReceived: {
-        type: Number,
-        default: 0,
-        min: 0
+      type: Number,
+      default: 0,
+      min: 0,
     },
+
     availableQuantity: {
-        type: Number,
-        default: 0,
-        min: 0
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     notes: {
-        type: String,
-        default: ""
-    }
-
-}, {
-    timestamps: true
-});
+      type: String,
+      default: "",
+    },
+  },
+  {
+    timestamps: true,
+  },
+);
 
 module.exports =
-    mongoose.models.MakerProductionItem ||
-    mongoose.model(
-        "MakerProductionItem",
-        makerProductionItemSchema
-    );
+  mongoose.models.MakerProductionItem ||
+  mongoose.model("MakerProductionItem", makerProductionItemSchema);
