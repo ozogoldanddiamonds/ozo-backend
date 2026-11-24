@@ -327,6 +327,9 @@ const {
 const {
   fetchWhatsAppTemplates,
 } = require("../controllers/whatsapp.controller");
+const {
+  razorpayWebhook,
+} = require("../controllers/razorpay-webhook.controller");
 
 router.post("/create-contact", createContact);
 router.get("/getall-contact", getAllContacts);
@@ -813,5 +816,5 @@ router.post(
 router.post("/orders/:id/download-pod", verifyToken, downloadOrderPOD);
 
 router.get("/whatsapp/templates", verifyToken, fetchWhatsAppTemplates);
-
+router.post("/razorpay/webhook", razorpayWebhook);
 module.exports = router;

@@ -735,6 +735,137 @@ exports.verifySchemeRazorpayPayment = async (req, res) => {
   }
 };
 
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const signature = req.headers["x-razorpay-signature"];
+
+    if (!webhookSecret || !signature || !Buffer.isBuffer(req.body)) {
+      return res.status(400).send("Invalid webhook request");
+    }
+
+    // Verify Razorpay webhook signature
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(req.body)
+      .digest("hex");
+
+    const receivedBuffer = Buffer.from(signature, "hex");
+    const expectedBuffer = Buffer.from(expectedSignature, "hex");
+
+    if (
+      receivedBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
+    ) {
+      return res.status(400).send("Invalid webhook signature");
+    }
+
+    const event = JSON.parse(req.body.toString("utf8"));
+
+    console.log("RAZORPAY WEBHOOK EVENT:", event.event);
+
+    if (
+      event.event !== "payment.captured" &&
+      event.event !== "payment.failed"
+    ) {
+      return res.status(200).json({ received: true });
+    }
+
+    const razorpayPayment = event.payload?.payment?.entity;
+
+    if (!razorpayPayment?.order_id || !razorpayPayment?.id) {
+      return res.status(400).send("Payment details missing");
+    }
+
+    // Find Scheme Payment Attempt using Razorpay Order ID
+    const attempt = await SchemePaymentAttempt.findOne({
+      razorpayOrderId: razorpayPayment.order_id,
+    });
+
+    // This event does not belong to a Scheme payment
+    if (!attempt) {
+      console.log("No Scheme PaymentAttempt found:", razorpayPayment.order_id);
+
+      return res.status(200).json({
+        received: true,
+        message: "Not a Scheme payment",
+      });
+    }
+
+    // Validate payment amount and currency
+    const expectedAmount = Math.round(Number(attempt.amount) * 100);
+
+    if (
+      razorpayPayment.amount !== expectedAmount ||
+      razorpayPayment.currency !== attempt.currency
+    ) {
+      console.error("Scheme payment amount/currency mismatch");
+
+      return res.status(400).send("Payment details mismatch");
+    }
+
+    // PAYMENT CAPTURED
+    if (event.event === "payment.captured") {
+      if (
+        razorpayPayment.status !== "captured" ||
+        razorpayPayment.captured !== true
+      ) {
+        return res.status(400).send("Payment is not captured");
+      }
+
+      const result = await completeSchemeInstallment({
+        attemptId: attempt._id,
+        userId: attempt.user,
+        razorpayPaymentId: razorpayPayment.id,
+      });
+
+      console.log("SCHEME INSTALLMENT WEBHOOK SUCCESS:", {
+        paymentAttemptId: attempt._id,
+        razorpayPaymentId: razorpayPayment.id,
+        alreadyCompleted: result.alreadyCompleted,
+      });
+
+      return res.status(200).json({
+        received: true,
+        message: "Scheme installment processed",
+      });
+    }
+
+    // PAYMENT FAILED
+    if (event.event === "payment.failed") {
+      // Do not mark attempt permanently failed.
+      // Another payment attempt on the same Razorpay order may succeed.
+      if (attempt.status === "CREATED") {
+        await SchemePaymentAttempt.updateOne(
+          {
+            _id: attempt._id,
+            status: "CREATED",
+          },
+          {
+            $set: {
+              failureReason:
+                razorpayPayment.error_description || "Payment failed",
+            },
+          },
+        );
+      }
+
+      return res.status(200).json({
+        received: true,
+        message: "Scheme payment failure recorded",
+      });
+    }
+  } catch (error) {
+    console.error("SCHEME RAZORPAY WEBHOOK ERROR:", error);
+
+    // Return 500 so Razorpay can retry delivery
+    return res.status(500).json({
+      received: false,
+      message: "Webhook processing failed",
+    });
+  }
+};
+
 // ======================================
 // Create Monthly Installment Payment
 // ======================================
@@ -919,9 +1050,6 @@ exports.createPayment = async (req, res) => {
   }
 };
 
-// ===============================
-// Get All Payments
-// ===============================
 // ===============================
 // Get All Payments
 // ===============================

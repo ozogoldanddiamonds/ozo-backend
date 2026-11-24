@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 console.log("GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID);
 const express = require("express");
@@ -8,22 +7,20 @@ const connectDB = require("./db");
 const cors = require("cors");
 const router = require("./router/router");
 
-
-
 const app = express();
 
 const server = http.createServer(app);
 
 connectDB();
+// IMPORTANT: Webhook raw body middleware FIRST
+app.use("/api/razorpay/webhook", express.raw({ type: "application/json" }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-
 app.use(cors());
 
-
-
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.send("API working");
 });
 
