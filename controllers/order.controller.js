@@ -1505,12 +1505,13 @@ exports.createOrder = async (req, res) => {
           orderNumber: order.orderNumber,
           messageId: order.whatsappMessageId,
         });
-      } catch (whatsappError) {
+      } catch (whatsappErr) {
         whatsappError =
-          whatsappError.response?.data?.error?.message ||
-          whatsappError.response?.data?.message ||
-          whatsappError.message ||
+          whatsappErr.response?.data?.error?.message ||
+          whatsappErr.response?.data?.message ||
+          whatsappErr.message ||
           "WhatsApp invoice sending failed";
+        ("WhatsApp invoice sending failed");
 
         console.error("========== WHATSAPP FAILED ==========", {
           orderNumber: order.orderNumber,

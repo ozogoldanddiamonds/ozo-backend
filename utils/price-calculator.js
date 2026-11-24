@@ -4,175 +4,147 @@ const MetalRate = require("../models/metal-rate");
 const StoneRate = require("../models/stone-rate");
 
 const calculateVariantPrice = async (variant) => {
+  // =========================
+  // METAL RATE
+  // =========================
 
-    // =========================
-    // METAL RATE
-    // =========================
+  const metalRate = await MetalRate.findOne({
+    metalType: variant.metalType,
+    purity: variant.metalPurity,
+    isActive: true,
+  }).lean();
 
-    const metalRate = await MetalRate.findOne({
-        metalType: variant.metalType,
-        purity: variant.metalPurity,
-        isActive: true
-    }).lean();
+  if (!metalRate) {
+    throw new Error(
+      `Metal rate not found for ${variant.metalType} ${variant.metalPurity}`,
+    );
+  }
 
-    if (!metalRate) {
-        throw new Error(
-            `Metal rate not found for ${variant.metalType} ${variant.metalPurity}`
-        );
+  // =========================
+  // METAL VALUE
+  // =========================
+
+  const metalValue = Number(variant.netWeight) * Number(metalRate.ratePerGram);
+
+  // =========================
+  // WASTAGE VALUE
+  // =========================
+
+  const wastageAmount =
+    (metalValue * Number(variant.wastagePercentage || 0)) / 100;
+
+  // =========================
+  // STONE VALUE
+  // =========================
+
+  // =========================
+  // STONE VALUE
+  // =========================
+
+  let stoneValue = 0;
+
+  const updatedStones = [];
+
+  if (variant.stones?.length) {
+    for (const stone of variant.stones) {
+      const query = {
+        stoneType: stone.stoneType,
+        stoneCategory: stone.stoneCategory,
+        isActive: true,
+      };
+
+      if (stone.quality) {
+        query.quality = stone.quality;
+      }
+
+      const stoneRate = await StoneRate.findOne(query).lean();
+
+      if (!stoneRate) {
+        updatedStones.push({
+          ...stone,
+          unit: "carat",
+          stoneValue: 0,
+        });
+
+        continue;
+      }
+
+      const currentStoneValue =
+        Number(stone.totalWeight || 0) * Number(stoneRate.ratePerUnit);
+
+      stoneValue += currentStoneValue;
+
+      updatedStones.push({
+        ...stone,
+
+        // Added from StoneRate collection
+        unit: stoneRate.unit || "carat",
+
+        stoneValue: Number(currentStoneValue.toFixed(2)),
+      });
     }
+  }
 
-    // =========================
-    // METAL VALUE
-    // =========================
+  // =========================
+  // MAKING CHARGES
+  // =========================
 
-    const metalValue =
-        Number(variant.netWeight) *
-        Number(metalRate.ratePerGram);
+  let makingCharges = 0;
 
-    // =========================
-    // WASTAGE VALUE
-    // =========================
+  if (variant.makingChargeType === "percentage") {
+    makingCharges =
+      ((metalValue + stoneValue) * Number(variant.makingCharges || 0)) / 100;
+  } else {
+    makingCharges = Number(variant.makingCharges || 0);
+  }
 
-    const wastageAmount =
-        (metalValue *
-            Number(variant.wastagePercentage || 0)) / 100;
+  // =========================
+  // SUB TOTAL
+  // =========================
 
-    // =========================
-    // STONE VALUE
-    // =========================
+  const subTotal = metalValue + wastageAmount + stoneValue + makingCharges;
 
-    let stoneValue = 0;
+  // =========================
+  // DISCOUNT
+  // =========================
 
-    const updatedStones = [];
+  const discountAmount =
+    (subTotal * Number(variant.discountPercentage || 0)) / 100;
 
-    if (variant.stones?.length) {
+  const afterDiscount = subTotal - discountAmount;
 
-        for (const stone of variant.stones) {
+  // =========================
+  // GST (3%)
+  // =========================
 
-            const query = {
-                stoneType: stone.stoneType,
-                stoneCategory: stone.stoneCategory,
-                isActive: true
-            };
+  const gstPercentage = 3;
 
-            if (stone.quality) {
-                query.quality = stone.quality;
-            }
+  const gstAmount = (afterDiscount * gstPercentage) / 100;
 
-            const stoneRate =
-                await StoneRate.findOne(query).lean();
+  // =========================
+  // FINAL PRICE
+  // =========================
 
-            if (!stoneRate) {
+  const finalPrice = afterDiscount + gstAmount;
 
-                updatedStones.push({
-                    ...stone,
-                    stoneValue: 0
-                });
+  return {
+    metalRate: metalRate.ratePerGram,
 
-                continue;
-            }
+    metalValue: Number(metalValue.toFixed(2)),
 
-            const currentStoneValue =
-                Number(stone.totalWeight || 0) *
-                Number(stoneRate.ratePerUnit);
+    wastageAmount: Number(wastageAmount.toFixed(2)),
 
-            stoneValue += currentStoneValue;
+    stoneValue: Number(stoneValue.toFixed(2)),
 
-            updatedStones.push({
+    makingCharges: Number(makingCharges.toFixed(2)),
 
-                ...stone,
+    discountAmount: Number(discountAmount.toFixed(2)),
 
-                stoneValue:
-                    Number(currentStoneValue.toFixed(2))
+    gstAmount: Number(gstAmount.toFixed(2)),
 
-            });
-
-        }
-    }
-
-    // =========================
-    // MAKING CHARGES
-    // =========================
-
-    let makingCharges = 0;
-
-    if (variant.makingChargeType === "percentage") {
-
-        makingCharges =
-            (
-                (metalValue + stoneValue) *
-                Number(variant.makingCharges || 0)
-            ) / 100;
-
-    } else {
-
-        makingCharges =
-            Number(variant.makingCharges || 0);
-    }
-
-    // =========================
-    // SUB TOTAL
-    // =========================
-
-    const subTotal =
-        metalValue +
-        wastageAmount +
-        stoneValue +
-        makingCharges;
-
-    // =========================
-    // DISCOUNT
-    // =========================
-
-    const discountAmount =
-        (
-            subTotal *
-            Number(variant.discountPercentage || 0)
-        ) / 100;
-
-    const afterDiscount =
-        subTotal -
-        discountAmount;
-
-    // =========================
-    // GST (3%)
-    // =========================
-
-    const gstPercentage = 3;
-
-    const gstAmount =
-        (
-            afterDiscount *
-            gstPercentage
-        ) / 100;
-
-    // =========================
-    // FINAL PRICE
-    // =========================
-
-    const finalPrice =
-        afterDiscount +
-        gstAmount;
-
-    return {
-
-        metalRate: metalRate.ratePerGram,
-
-        metalValue: Number(metalValue.toFixed(2)),
-
-        wastageAmount: Number(wastageAmount.toFixed(2)),
-
-        stoneValue: Number(stoneValue.toFixed(2)),
-
-        makingCharges: Number(makingCharges.toFixed(2)),
-
-        discountAmount: Number(discountAmount.toFixed(2)),
-
-        gstAmount: Number(gstAmount.toFixed(2)),
-
-        finalPrice: Number(finalPrice.toFixed(2)),
-        stones: updatedStones
-    };
+    finalPrice: Number(finalPrice.toFixed(2)),
+    stones: updatedStones,
+  };
 };
 
 module.exports = calculateVariantPrice;

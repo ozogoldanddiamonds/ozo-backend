@@ -2,12 +2,18 @@ const axios = require("axios");
 
 const sendOrderSuccessSms = async ({
   phone,
-  orderId,
-  paymentId,
-  amount,
-  orderDetails,
+  customerName,
+  orderNumber,
+  orderDate,
+  productDetails,
+  totalAmount,
+  paymentMode,
+  paymentStatus,
+  orderStatus,
+  invoiceUrl,
 }) => {
   try {
+    // 1. Buddy configuration
     const baseUrl = process.env.BUDDY_SMS_BASE_URL?.trim();
     const apiKey = process.env.BUDDY_SMS_API_KEY?.trim();
 
@@ -15,92 +21,154 @@ const sendOrderSuccessSms = async ({
       process.env.BUDDY_ORDER_SUCCESS_TEMPLATE_ID?.trim(),
     );
 
-    if (!baseUrl) {
-      throw new Error("BUDDY_SMS_BASE_URL is missing");
-    }
-
-    if (!apiKey) {
-      throw new Error("BUDDY_SMS_API_KEY is missing");
+    if (!baseUrl || !apiKey) {
+      throw new Error("Buddy SMS configuration is missing");
     }
 
     if (!Number.isSafeInteger(templateId) || templateId <= 0) {
-      throw new Error("Invalid order success SMS template ID");
+      throw new Error("Invalid Order Success SMS Template ID");
     }
 
+    // 2. Validate phone
     if (!phone) {
       throw new Error("Customer phone number is missing");
     }
 
-    if (!orderId || !paymentId) {
-      throw new Error("Order ID or Payment ID is missing");
+    let mobileNumber = String(phone).replace(/\D/g, "");
+
+    if (mobileNumber.length === 12 && mobileNumber.startsWith("91")) {
+      mobileNumber = mobileNumber.substring(2);
     }
 
-    if (!Number.isFinite(Number(amount))) {
+    if (!/^[6-9]\d{9}$/.test(mobileNumber)) {
+      throw new Error("Invalid Indian mobile number");
+    }
+
+    // 3. Validate required fields
+    if (!customerName || !String(customerName).trim()) {
+      throw new Error("Customer name is missing");
+    }
+
+    if (!orderNumber) {
+      throw new Error("Order number is missing");
+    }
+
+    if (!invoiceUrl || !/^https:\/\//i.test(String(invoiceUrl))) {
+      throw new Error("Valid HTTPS invoice URL is required");
+    }
+
+    const amount = Number(totalAmount);
+
+    if (!Number.isFinite(amount) || amount < 0) {
       throw new Error("Invalid order amount");
     }
 
-    // Buddy SMS Payload
+    // 4. Buddy personalized template payload
     const payload = {
       template_id: templateId,
       unicode: 0,
       personalized: 1,
+
       numbers: [
         {
-          number: phone,
+          number: mobileNumber,
 
-          // IMPORTANT:
-          // These keys must match Buddy template 24356
-          // variable mapping exactly.
+          // Buddy variable 1
+          customerName: String(customerName).trim(),
 
-          "#alp1#": String(orderId),
-          "#alp2#": String(paymentId),
+          // Buddy variable 2
+          orderNumber: String(orderNumber).trim(),
 
-          // DLT template expects: Rs. 25000
-          // Do not send 25000.00
-          "#num1#": String(Math.round(Number(amount))),
+          // Buddy variable 3
+          orderDate: String(orderDate || "N/A"),
 
-          // DLT template expects: Gold Ring - 1 Item
-          "#alp3#": String(orderDetails || "Order placed successfully"),
+          // Buddy variable 4
+          productDetails: String(productDetails || "Order Products"),
+
+          // Buddy variable 5
+          totalAmount: String(Math.round(amount)),
+
+          // Buddy variable 6
+          paymentMode: String(paymentMode || "N/A"),
+
+          // Buddy variable 7
+          paymentStatus: String(paymentStatus || "PENDING"),
+
+          // Buddy variable 8
+          orderStatus: String(orderStatus || "Confirmed"),
+
+          // Buddy variable 9 - URL
+          invoiceUrl: String(invoiceUrl).trim(),
         },
       ],
     };
 
-    console.log("ORDER SMS FINAL PAYLOAD:", JSON.stringify(payload, null, 2));
+    const endpoint = `${baseUrl.replace(/\/+$/, "")}/sms/sendMessage`;
 
-    const response = await axios.post(`${baseUrl}/sms/sendMessage`, payload, {
+    // 5. Log request
+    console.log("========== ORDER SUCCESS SMS STARTED ==========");
+
+    console.log({
+      templateId,
+      mobileNumber: `******${mobileNumber.slice(-4)}`,
+      customerName,
+      orderNumber,
+      invoiceUrl,
+    });
+
+    console.log(
+      "ORDER SMS PAYLOAD:",
+      JSON.stringify(
+        {
+          ...payload,
+          numbers: payload.numbers.map(({ number, ...variables }) => ({
+            number: `******${number.slice(-4)}`,
+            ...variables,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+
+    // 6. Send SMS
+    const response = await axios.post(endpoint, payload, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
       timeout: 15000,
     });
 
-    console.log(
-      "ORDER SMS GATEWAY STATUS:",
-      response.status,
-      "BODY:",
-      JSON.stringify(response.data, null, 2),
-    );
+    console.log("BUDDY ORDER SMS RESPONSE:", response.data);
 
     if (response.data?.success !== true) {
       throw new Error(
-        response.data?.message || "Order success SMS gateway rejected request",
+        response.data?.message || "Buddy rejected Order Success SMS",
       );
     }
 
+    console.log("========== ORDER SUCCESS SMS ACCEPTED ==========");
+
+    console.log({
+      orderNumber,
+      templateId,
+      referenceId: response.data.reference_id,
+      status: response.data.message,
+    });
+
     return response.data;
   } catch (error) {
-    console.error("Order Success SMS Error:", {
+    console.error("========== ORDER SUCCESS SMS FAILED ==========");
+
+    console.error({
       message: error.message,
       status: error.response?.status,
       response: error.response?.data,
     });
 
-    throw new Error(
-      error.response?.data?.message ||
-        error.message ||
-        "Unable to send order success SMS",
-    );
+    throw error;
   }
 };
 

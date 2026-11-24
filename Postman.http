@@ -214,7 +214,7 @@ GET http://localhost:3001/api/getProductsByType/TRENDING
 Content-Type: application/json
 
 ###
-GET http://localhost:3001/api/get-product/6a1e7141c2aad3cac853ace3
+GET http://localhost:3001/api/get-product/6b04bfe607ab427110556f3e
 Content-Type: application/json 
 
 ###
@@ -510,33 +510,33 @@ POST http://localhost:3001/api/createOrder
 Content-Type: application/json
 
 {
-    "orderSource": "SUB_BRANCH",
+    "orderSource": "ONLINE",
 
-    "branch": "6a3912d97c3f96315204b938",
+    "branch": "",
 
-    "subBranch": "6a3f9f101ad4a9c798bb8e32",
+    "subBranch": "",
 
-    "createdBy": "6a3f9f101ad4a9c798bb8e32",
+    "createdBy": "",
 
     "customerDetails": {
-        "name": "Pradeep",
-        "phone": "8765432190",
+        "name": "nani",
+        "phone": "8978971154",
         "email": "pradeep@gmail.com"
     },
 
-    "paymentMethod": "CASH",
+    "paymentMethod": "ONLINE",
 
     "items": [
         {
-            "product": "6a2bb7e2d2301fa636ccda30",
-            "variant": "6a2bc37ff79263ad81dc316b",
+            "product": "6af9f11029051e6ce88f37c3",
+            "variant": "6af9f11029051e6ce88f37c3",
             "quantity": 1
         }
     ],
 
     "couponCode": "",
 
-    "notes": "Walk-in Customer"
+    "notes": "Online"
 }
 
 ###
