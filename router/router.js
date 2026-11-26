@@ -60,6 +60,7 @@ const {
 
 const {
   sendUserOtp,
+  checkCustomerMobile,
   verifyUserOtp,
   resendUserOtp,
   refreshUserToken,
@@ -331,6 +332,8 @@ const {
   razorpayWebhook,
 } = require("../controllers/razorpay-webhook.controller");
 
+const { downloadOrderInvoice } = require("../controllers/invoice.controller");
+
 router.post("/create-contact", createContact);
 router.get("/getall-contact", getAllContacts);
 router.post("/getbyid-contact/:id", getContactById);
@@ -423,6 +426,7 @@ router.post("/upload-certificate", upload.single("file"), uploadCertificate);
 // router.get("/getAllProducts",getAllProducts);
 // router.put("/UpdateProduct/:id",upload.array("images", 10),updateProduct);
 router.post("/send-otp", sendUserOtp);
+router.post("/check-customer-mobile", checkCustomerMobile);
 router.post("/verify-otp", verifyUserOtp);
 router.post("/resend-otp", resendUserOtp);
 router.post("/refresh-token", refreshUserToken);
@@ -817,4 +821,7 @@ router.post("/orders/:id/download-pod", verifyToken, downloadOrderPOD);
 
 router.get("/whatsapp/templates", verifyToken, fetchWhatsAppTemplates);
 router.post("/razorpay/webhook", razorpayWebhook);
+
+router.get("/download/:userId/:orderId", verifyToken, downloadOrderInvoice);
+
 module.exports = router;

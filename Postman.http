@@ -747,14 +747,11 @@ POST http://localhost:3001/api/create-payment
 Content-Type: application/json
 
 {
-    "subscription": "6a51e57a86a5b9c0b3f28111",
-    "user": "6a2bf6dc9a89e91f73d21b1f",
-    "monthNo": 1,
-    "amount": 5000,
-    "paymentDate": "2026-07-11",
-    "paymentMode": "UPI",
-    "transactionId": "TXN100001",
-    "status": "PAID"
+  "subscription": "6b0531d541a1a448e7a6c06b",
+  "user": "6b0531b941a1a448e7a6c05d",
+  "paymentMode": "ONLINE",
+  "transactionId": "pay_U3vI91cx1fgZ91",
+  "gateway": "RAZORPAY"
 }
 
 ###
@@ -973,3 +970,13 @@ Content-Type: application/json
 GET https://multichannel.buddyinfotech.in/api/v1/sms/templates/24360
 Content-Type: application/json
 Authorization: Bearer 387|K5Jt9hZG27EqL7JWY0JLnbHtP7yoabGX8oLN9e9r064c1cfc
+
+
+
+###
+POST http://localhost:3001/api/check-customer-mobile
+Content-Type: application/json
+
+{
+  "phone": "+918978971154"
+}

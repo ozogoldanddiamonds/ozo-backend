@@ -171,6 +171,7 @@ exports.sendUserOtp = async (req, res) => {
   let isNewDocument = false;
   let previousOtp;
   let previousExpiry;
+  let previousName;
 
   try {
     if (!process.env.OTP_SECRET || !process.env.JWT_SECRET) {
@@ -180,14 +181,27 @@ exports.sendUserOtp = async (req, res) => {
       });
     }
 
-    // 1. Normalize international number
+    // 1. Normalize phone
     const phoneData = normalizeInternationalPhone(req.body.phone);
     const { phone, countryCode } = phoneData;
 
-    // 2. Find existing user (including old Indian records)
+    // 2. Find existing user
     user = await findUserByInternationalPhone(phoneData);
 
-    // 3. Resend restriction
+    // 3. Get name
+    const name = String(req.body.name || "").trim();
+
+    // 4. Validate name only when required
+    if (!user || !user.name || !user.name.trim()) {
+      if (name.length < 2 || name.length > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid customer name",
+        });
+      }
+    }
+
+    // 5. Resend restriction
     if (user && user.OTPExpires && user.OTP) {
       const previousExpiryTime = new Date(user.OTPExpires).getTime();
 
@@ -206,35 +220,40 @@ exports.sendUserOtp = async (req, res) => {
       }
     }
 
-    // 4. Create new user if not found
+    // 6. Create new user if not found
     if (!user) {
       user = new User({
+        name,
         phone,
         phoneCountryCode: countryCode,
         isVerified: false,
       });
 
       isNewDocument = true;
+    } else {
+      // Preserve existing customer name
+      if (!user.name || !user.name.trim()) {
+        previousName = user.name;
+        user.name = name;
+      }
     }
 
+    // 7. Store previous OTP
     previousOtp = user.OTP;
     previousExpiry = user.OTPExpires;
 
-    // 5. Generate OTP
+    // 8. Generate OTP
     const otp = crypto.randomInt(100000, 1000000).toString();
 
     user.phone = phone;
     user.phoneCountryCode = countryCode;
-
     user.OTP = hashOtp(otp);
-
     user.OTPExpires = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     await user.save();
 
     try {
-      // 6. Send OTP to international number
-      // sendOtpSms must accept E.164 format
+      // 9. Send SMS
       const smsResult = await sendOtpSms(phone, otp);
 
       return res.status(200).json({
@@ -249,12 +268,17 @@ exports.sendUserOtp = async (req, res) => {
         },
       });
     } catch (smsError) {
-      // 7. Rollback OTP if SMS fails
+      // 10. Rollback
       if (isNewDocument) {
         await User.deleteOne({ _id: user._id });
       } else {
         user.OTP = previousOtp;
         user.OTPExpires = previousExpiry;
+
+        if (previousName !== undefined) {
+          user.name = previousName;
+        }
+
         await user.save();
       }
 
@@ -277,6 +301,30 @@ exports.sendUserOtp = async (req, res) => {
   }
 };
 
+// CHECK CUSTOMER MOBILE
+exports.checkCustomerMobile = async (req, res) => {
+  try {
+    const phoneData = normalizeInternationalPhone(req.body.phone);
+
+    const user = await findUserByInternationalPhone(phoneData);
+
+    const nameRequired = !user || !user.name || !user.name.trim();
+
+    return res.status(200).json({
+      success: true,
+      userExists: !!user,
+      nameRequired,
+      message: nameRequired ? "Customer name is required" : "Customer found",
+    });
+  } catch (error) {
+    console.error("Check Customer Mobile Error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Unable to check mobile number",
+    });
+  }
+};
 exports.verifyUserOtp = async (req, res) => {
   try {
     // 1. Normalize international phone

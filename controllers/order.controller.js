@@ -10,7 +10,7 @@ const Admin = require("../models/user");
 const { sendInvoiceEmail } = require("../middleware/mail");
 const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const MakerProductionItem = require("../models/maker-production-item");
-const generateOrderInvoice = require("../utils/generate-order-invoice");
+const generateOrderInvoice = require("../utils/invoicePdfGenerator");
 const uploadInvoicePdf = require("../middleware/upload-invoice-pdf");
 const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
 const sendOrderSuccessSms = require("../utils/send-order-success-sms");
@@ -845,7 +845,7 @@ exports.createOrder = async (req, res) => {
         city: address.city,
         state: address.state,
         country: address.country,
-        postalCode: address.postalCode,
+        postalCode: address.pincode || address.postalCode || "",
       };
     }
 
@@ -1044,6 +1044,9 @@ exports.createOrder = async (req, res) => {
         subSubCategory: product.subSubCategory?.toString() || null,
         productType: product.productType,
         brand: product.brand || "",
+        categoryName: category?.name || "",
+        subCategoryName: subCategory?.name || "",
+        brandName: brand?.name || "",
       };
 
       // ==========================================
@@ -1064,10 +1067,17 @@ exports.createOrder = async (req, res) => {
       // VARIANT SNAPSHOT
       // ==========================================
 
-      const variantSnapshot = savedItem?.variantSnapshot || {
+      const variantSnapshot = {
+        ...(savedItem?.variantSnapshot || {}),
+
         sku: variant.sku,
         metalType: variant.metalType,
-        purity: variant.metalPurity,
+        purity:
+          savedItem?.variantSnapshot?.purity ||
+          savedItem?.variantSnapshot?.metalPurity ||
+          variant.metalPurity ||
+          "",
+
         metalColor: variant.metalColor,
         size: variant.size,
         grossWeight: Number(variant.grossWeight) || 0,
@@ -1075,9 +1085,11 @@ exports.createOrder = async (req, res) => {
         wastagePercentage: Number(variant.wastagePercentage) || 0,
         stoneWeight,
         diamondWeight,
+
         makingCharge: Number(variant.makingCharges) || 0,
         makingChargeType: variant.makingChargeType,
         discountPercentage: Number(variant.discountPercentage) || 0,
+
         stoneType: stonesSnapshot?.[0]?.stoneType || null,
         gender: product.gender || null,
         stones: stonesSnapshot,
