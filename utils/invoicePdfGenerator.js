@@ -655,39 +655,37 @@ const generateInvoicePdf = (order, user = {}, invoiceNumber) => {
         });
       };
 
-      const drawOrderSummary = () => {
-        addSection("Order Summary");
+      //   const drawOrderSummary = () => {
+      //     addSection("Order Summary");
+      //     addKeyValue("Subtotal", money(order.subTotal));
+      //     addKeyValue("Discount", money(order.discountAmount));
+      //     if (order.couponCode) {
+      //       addKeyValue("Coupon Code", safe(order.couponCode));
+      //     }
 
-        addKeyValue("Subtotal", money(order.subTotal));
-        addKeyValue("Discount", money(order.discountAmount));
+      //     addKeyValue("Shipping Charge", money(order.shippingCharge));
+      //     addKeyValue("GST Amount", money(order.gstAmount));
 
-        if (order.couponCode) {
-          addKeyValue("Coupon Code", safe(order.couponCode));
-        }
+      //     y += 5;
+      //     ensureSpace(30);
 
-        addKeyValue("Shipping Charge", money(order.shippingCharge));
-        addKeyValue("GST Amount", money(order.gstAmount));
+      //     doc
+      //       .moveTo(LEFT, y)
+      //       .lineTo(RIGHT, y)
+      //       .strokeColor(RED)
+      //       .lineWidth(1)
+      //       .stroke();
 
-        y += 5;
-        ensureSpace(30);
+      //     y += 10;
 
-        doc
-          .moveTo(LEFT, y)
-          .lineTo(RIGHT, y)
-          .strokeColor(RED)
-          .lineWidth(1)
-          .stroke();
-
-        y += 10;
-
-        addKeyValue("GRAND TOTAL", money(order.totalAmount), {
-          bold: true,
-          color: RED,
-          fontSize: 11,
-          labelWidth: 250,
-          rowGap: 5,
-        });
-      };
+      //     addKeyValue("GRAND TOTAL", money(order.totalAmount), {
+      //       bold: true,
+      //       color: RED,
+      //       fontSize: 11,
+      //       labelWidth: 250,
+      //       rowGap: 5,
+      //     });
+      //   };
 
       const drawPaymentDetails = () => {
         addSection("Payment Details");
@@ -820,7 +818,7 @@ const generateInvoicePdf = (order, user = {}, invoiceNumber) => {
         drawProductDetails(item, index);
       });
 
-      drawOrderSummary();
+      //   drawOrderSummary();
       drawPaymentDetails();
 
       // Customer closing message at the end of the invoice content.

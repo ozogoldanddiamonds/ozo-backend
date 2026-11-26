@@ -11,6 +11,7 @@ const { sendInvoiceEmail } = require("../middleware/mail");
 const SupplierPurchaseItem = require("../models/supplier-purchase-items");
 const MakerProductionItem = require("../models/maker-production-item");
 const generateOrderInvoice = require("../utils/invoicePdfGenerator");
+const sendOrderImageWhatsApp = require("../utils/send-order-image-whatsapp");
 const uploadInvoicePdf = require("../middleware/upload-invoice-pdf");
 const sendOrderWhatsApp = require("../utils/send-order-whatsapp");
 const sendOrderSuccessSms = require("../utils/send-order-success-sms");
@@ -1035,18 +1036,26 @@ exports.createOrder = async (req, res) => {
       // PRODUCT SNAPSHOT
       // ==========================================
 
-      const productSnapshot = savedItem?.productSnapshot || {
+      const productSnapshot = {
+        ...(savedItem?.productSnapshot || {}),
+
         name: product.name,
         slug: product.slug,
-        image: product.images?.[0] || null,
+
+        // Cloudinary first image
+        image: product.images?.[0] || savedItem?.productSnapshot?.image || null,
+
         category: product.category?.toString() || null,
         subCategory: product.subCategory?.toString() || null,
         subSubCategory: product.subSubCategory?.toString() || null,
+
         productType: product.productType,
         brand: product.brand || "",
-        categoryName: category?.name || "",
-        subCategoryName: subCategory?.name || "",
-        brandName: brand?.name || "",
+
+        // Preserve existing snapshot names without undefined variables
+        categoryName: savedItem?.productSnapshot?.categoryName || "",
+        subCategoryName: savedItem?.productSnapshot?.subCategoryName || "",
+        brandName: savedItem?.productSnapshot?.brandName || "",
       };
 
       // ==========================================
@@ -1370,9 +1379,10 @@ exports.createOrder = async (req, res) => {
       console.log("Invoice Number:", order.invoiceNumber);
       console.log("Invoice URL:", order.invoicePdfUrl);
     } catch (invoiceError) {
-      console.error("INVOICE GENERATION FAILED:", {
+      console.error("========== INVOICE GENERATION FAILED ==========", {
         orderNumber: order.orderNumber,
         message: invoiceError.message,
+        stack: invoiceError.stack,
       });
 
       order.whatsappInvoiceStatus = "FAILED";
@@ -1477,6 +1487,39 @@ exports.createOrder = async (req, res) => {
         if (!customerPhone) {
           throw new Error("Customer WhatsApp number not found");
         }
+        // SEND PRODUCT IMAGE WHATSAPP
+
+        try {
+          const firstItem = order.items?.[0];
+
+          const productImage = firstItem?.productSnapshot?.image;
+
+          console.log("========== PRODUCT IMAGE WHATSAPP ==========");
+          console.log("Product Name:", firstItem?.productSnapshot?.name);
+          console.log("Product Image:", productImage);
+
+          if (!productImage) {
+            throw new Error("Cloudinary product first image not found");
+          }
+
+          const imageResult = await sendOrderImageWhatsApp({
+            phone: customerPhone,
+            productImage,
+            orderNumber: order.orderNumber,
+            customerName,
+            productName: firstItem?.productSnapshot?.name,
+            quantity: firstItem?.quantity,
+            orderAmount: order.totalAmount,
+          });
+
+          console.log("PRODUCT IMAGE WHATSAPP ACCEPTED:", imageResult);
+        } catch (imageError) {
+          console.error("PRODUCT IMAGE WHATSAPP FAILED:", {
+            message: imageError.message,
+            response: imageError.response?.data || null,
+            stack: imageError.stack,
+          });
+        }
 
         const whatsappResult = await sendOrderWhatsApp({
           phone: customerPhone,
@@ -1528,6 +1571,8 @@ exports.createOrder = async (req, res) => {
         console.error("========== WHATSAPP FAILED ==========", {
           orderNumber: order.orderNumber,
           message: whatsappError,
+          response: whatsappErr.response?.data || null,
+          stack: whatsappErr.stack,
         });
 
         order.whatsappInvoiceStatus = "FAILED";

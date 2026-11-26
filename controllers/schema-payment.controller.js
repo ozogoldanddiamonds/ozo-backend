@@ -4,6 +4,7 @@ const Payment = require("../models/scheme-payment");
 const UserScheme = require("../models/user-schema");
 const SchemePaymentAttempt = require("../models/scheme-payment-attempt");
 const razorpay = require("../config/razorpay");
+const sendSchemeInstallmentWhatsApp = require("../utils/send-scheme-installment-whatsapp");
 
 const User = require("../models/user");
 const sendSchemeInstallmentSms = require("../utils/send-scheme-installment-sms");
@@ -561,7 +562,77 @@ const completeSchemeInstallment = async ({
   }
 
   console.log("========== SCHEME SMS END ==========");
+  // ==========================================
+  // 16. SEND SCHEME INSTALLMENT SUCCESS WHATSAPP
+  // ==========================================
 
+  if (!result.alreadyCompleted) {
+    try {
+      const subscriptionDetails = await UserScheme.findById(
+        result.subscription._id,
+      )
+        .populate("user")
+        .lean();
+
+      if (!subscriptionDetails?.user) {
+        throw new Error("Customer details not found for WhatsApp");
+      }
+
+      const customer = subscriptionDetails.user;
+
+      const formatWhatsAppDate = (date) => {
+        if (!date) return "N/A";
+
+        return new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        }).format(new Date(date));
+      };
+
+      const whatsappResult = await sendSchemeInstallmentWhatsApp({
+        phone: customer.phone || customer.mobileNumber || customer.phoneNumber,
+
+        customerName: customer.name || customer.fullName || "Customer",
+
+        schemeName: result.subscription.schemeName,
+
+        installmentNo: result.payment.monthNo,
+
+        totalInstallments: result.subscription.totalInstallments,
+
+        amount: result.payment.amount,
+
+        paymentDate: formatWhatsAppDate(result.payment.paymentDate),
+
+        transactionId:
+          result.payment.gatewayPaymentId || result.payment.transactionId,
+
+        paymentStatus: "Paid",
+
+        totalPaidAmount: result.subscription.totalPaidAmount,
+
+        remainingInstallments: result.subscription.remainingInstallments,
+
+        nextDueDate:
+          result.subscription.remainingInstallments > 0
+            ? formatWhatsAppDate(result.subscription.nextDueDate)
+            : "N/A",
+      });
+
+      console.log(
+        "SCHEME INSTALLMENT WHATSAPP SENT:",
+        whatsappResult.messageId,
+      );
+    } catch (whatsappError) {
+      // WhatsApp failure must not affect successful payment.
+      console.error(
+        "SCHEME INSTALLMENT WHATSAPP FAILED:",
+        whatsappError.message,
+      );
+    }
+  }
   return result;
 };
 
